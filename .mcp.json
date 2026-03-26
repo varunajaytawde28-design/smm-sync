@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "smm-sync": {
+      "command": "smm",
+      "args": ["serve"],
+      "env": {
+        "ANTHROPIC_API_KEY": ""
+      }
+    }
+  }
+}

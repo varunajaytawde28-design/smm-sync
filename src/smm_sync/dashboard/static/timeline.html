@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Time-Travel — CaaS</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⬡</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.0/index.min.css">
+<style>
+  :root {
+    --bg: #fafaf8; --surface: #ffffff; --surface-2: #f4f4f0;
+    --border: #e8e5e0; --border-dark: #d4d0ca;
+    --text: #1a1917; --text-mid: #44403c; --text-muted: #78716c; --text-dim: #a8a29e;
+    --accent: #2563eb; --accent-light: #eff6ff; --accent-border: #bfdbfe;
+    --green: #16a34a; --green-light: #f0fdf4; --green-border: #bbf7d0;
+    --amber: #d97706; --amber-light: #fffbeb; --amber-border: #fde68a;
+    --red: #dc2626; --red-light: #fef2f2; --red-border: #fecaca;
+    --surface-3: #eeede9;
+    --border-2: #d4d0ca;
+    --mono: 'JetBrains Mono', 'Fira Code', monospace;
+    --serif: 'Instrument Serif', Georgia, serif;
+    --sans: 'Geist', system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Geist', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; font-size: 14px; }
+
+  /* Sidebar */
+  .sidebar { width: 208px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: 50; }
+  .logo { padding: 20px 18px 16px; border-bottom: 1px solid var(--border); }
+  .logo-wordmark { font-family: var(--serif); font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 8px; letter-spacing: -0.5px; }
+  .logo-icon { width: 28px; height: 28px; background: var(--accent); border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 13px; color: white; font-weight: 700; }
+  .logo-sub { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .nav { flex: 1; padding: 10px 8px; overflow-y: auto; }
+  .nav-section { margin-bottom: 16px; }
+  .nav-label { font-size: 10px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; color: var(--text-dim); padding: 0 10px; margin-bottom: 3px; }
+  .nav-item { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 7px; cursor: pointer; font-size: 13px; color: var(--text-muted); transition: all 0.12s; }
+  .nav-item:hover { background: var(--surface-2); color: var(--text); }
+  .nav-item.active { color: var(--accent); font-weight: 500; background: transparent; border-left: 2px solid var(--accent); border-radius: 0 6px 6px 0; padding-left: 7px; }
+  .nav-icon { font-size: 14px; width: 18px; text-align: center; }
+  .nav-badge { margin-left: auto; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 10px; background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); }
+  .nav-badge.blue { background: var(--accent-light); color: var(--accent); border-color: var(--accent-border); }
+  .nav-soon { margin-left: auto; font-size: 9px; padding: 1px 5px; border-radius: 4px; background: var(--surface-2); color: var(--text-dim); }
+  .sidebar-footer { padding: 12px; border-top: 1px solid var(--border); }
+
+  /* Main */
+  .main { margin-left: 208px; flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+  .topbar { height: 48px; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 24px; gap: 12px; font-size: 15px; font-weight: 600; position: sticky; top: 0; z-index: 10; }
+  .topbar-back { color: var(--text-muted); font-size: 13px; font-weight: 400; cursor: pointer; }
+  .topbar-back:hover { color: var(--accent); }
+  .content { padding: 24px; flex: 1; }
+
+  /* Scrubber */
+  .scrubber-row { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+  .scrubber-label { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+  .date-scrubber { flex: 1; height: 4px; accent-color: var(--accent); cursor: pointer; }
+  .scrubber-date { font-size: 12px; color: var(--text-muted); min-width: 80px; text-align: right; }
+  .topic-input { flex: 0 0 220px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; font-family: inherit; background: var(--surface); color: var(--text); }
+  .topic-input:focus { outline: none; border-color: var(--accent); }
+  .btn { padding: 6px 12px; border-radius: 6px; border: none; cursor: pointer; font-size: 12px; font-family: inherit; font-weight: 500; transition: all 0.12s; }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-primary:hover { background: #1d4ed8; }
+
+  /* Timeline */
+  .timeline-track { position: relative; padding-left: 28px; }
+  .timeline-track::before { content: ''; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+  .tl-item { position: relative; margin-bottom: 20px; }
+  .tl-dot { position: absolute; left: -24px; top: 12px; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--accent); background: var(--surface); z-index: 1; }
+  .tl-dot.invalid { border-color: var(--text-dim); background: var(--surface-2); }
+  .tl-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.05); transition: box-shadow 0.15s; cursor: pointer; }
+  .tl-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+  .tl-card.expanded .tl-body { display: block; }
+  .tl-header { padding: 12px 16px; display: flex; align-items: flex-start; gap: 12px; }
+  .tl-meta { flex: 1; }
+  .tl-title { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+  .tl-date { font-size: 11px; color: var(--text-dim); }
+  .tl-badge { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 500; white-space: nowrap; }
+  .tl-badge.valid { background: var(--green-light); color: var(--green); border: 1px solid var(--green-border); }
+  .tl-badge.invalid { background: var(--surface-2); color: var(--text-dim); border: 1px solid var(--border); }
+  .tl-body { display: none; padding: 0 16px 14px; border-top: 1px solid var(--border); margin-top: 2px; }
+  .tl-body-inner { padding-top: 12px; font-size: 13px; color: var(--text-mid); line-height: 1.6; }
+  .tl-superseded { font-size: 11px; color: var(--amber); margin-top: 6px; font-style: italic; }
+  .tl-chevron { font-size: 12px; color: var(--text-dim); margin-top: 2px; transition: transform 0.15s; }
+  .tl-card.expanded .tl-chevron { transform: rotate(180deg); }
+
+  /* Empty */
+  .empty-state { text-align: center; padding: 60px 24px; }
+  .empty-icon { font-size: 36px; margin-bottom: 12px; opacity: 0.4; }
+  .empty-title { font-size: 15px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; }
+  .empty-desc { font-size: 13px; color: var(--text-dim); }
+
+  /* Loading */
+  .loading { text-align: center; padding: 40px; color: var(--text-dim); font-size: 13px; }
+
+  /* Snapshot panel */
+  .snapshot-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 24px; display: none; }
+  .snapshot-panel.visible { display: block; }
+  .snapshot-title { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px; }
+  .snapshot-count { font-family: var(--serif); font-size: 24px; font-weight: 600; color: var(--accent); }
+  .snapshot-sub { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="logo" style="padding:16px 14px 12px;border-bottom:1px solid var(--border)">
+    <div class="logo-wordmark" style="font-family:var(--serif);font-size:19px;font-weight:600;display:flex;align-items:center;gap:8px;letter-spacing:-0.3px">
+      <div class="logo-icon" style="width:26px;height:26px;background:var(--accent);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;color:white;font-weight:700;flex-shrink:0">C</div>
+      CaaS
+    </div>
+    <div style="font-size:11px;color:var(--text-dim);margin-top:2px;padding-left:34px">context-as-a-service</div>
+  </div>
+  <div style="padding:8px 12px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;align-items:center;justify-content:space-between;font-size:12px;font-weight:500;color:var(--text-mid)">
+    <span id="sb-repo-name">smm-sync</span>
+    <span style="color:var(--text-dim)">⌄</span>
+  </div>
+  <nav class="nav">
+    <div class="nav-section">
+      <div class="nav-label">OVERVIEW</div>
+      <a class="nav-item" href="/" style="text-decoration:none"><span class="nav-icon">◈</span><span>Dashboard</span></a>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">KNOWLEDGE</div>
+      <a class="nav-item" href="/decisions" style="text-decoration:none"><span class="nav-icon">◇</span><span>All Decisions</span><span class="nav-badge" id="sb-decisions-badge">—</span></a>
+      <a class="nav-item" href="/graph" style="text-decoration:none"><span class="nav-icon">⬡</span><span>Decision Graph</span></a>
+      <a class="nav-item" href="/board" style="text-decoration:none"><span class="nav-icon">⊞</span><span>Decision Board</span><span class="nav-badge" id="sb-board-badge">—</span></a>
+      <a class="nav-item active" href="/timeline" style="text-decoration:none"><span class="nav-icon">⏱</span><span>Time-Travel</span></a>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">COMPLIANCE</div>
+      <a class="nav-item" href="/compliance" style="text-decoration:none"><span class="nav-icon">⊟</span><span>Audit Trail</span><span class="nav-badge" id="sb-compliance-badge">—</span></a>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">CAPTURE</div>
+      <a class="nav-item" href="#" style="text-decoration:none"><span class="nav-icon">⑂</span><span>GitHub</span><span class="nav-badge blue" id="sb-github-badge">—</span></a>
+      <a class="nav-item" href="#" style="text-decoration:none"><span class="nav-icon">#</span><span>Slack</span><span class="nav-soon">soon</span></a>
+    </div>
+  </nav>
+  <div class="sidebar-footer">
+    <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted)">
+      <span id="sb-agent-dot" style="color:var(--text-dim);font-size:8px">●</span>
+      <span id="sb-agent-text">0 agents live</span>
+      <span style="margin-left:auto;display:flex;gap:8px;color:var(--text-dim)">
+        <span style="cursor:pointer" title="Settings">⚙</span>
+        <span style="cursor:pointer" title="Status">◎</span>
+      </span>
+    </div>
+  </div>
+</aside>
+
+<main class="main">
+  <div class="topbar">
+    <span class="topbar-back" onclick="window.location='/'">← Dashboard</span>
+    <span style="color:var(--border)">|</span>
+    ⏱ Time-Travel
+  </div>
+
+  <div class="content">
+    <div class="scrubber-row">
+      <span class="scrubber-label">Topic:</span>
+      <input class="topic-input" id="topic-input" placeholder="e.g. file locking, graph db, auth..." value="">
+      <button class="btn btn-primary" onclick="loadTimeline()">→</button>
+      <span class="scrubber-label" style="margin-left:auto">Filter by date:</span>
+      <input type="range" class="date-scrubber" id="date-scrubber" min="0" max="100" value="100" oninput="filterByDate(this.value)">
+      <span class="scrubber-date" id="scrubber-date-label">All time</span>
+    </div>
+
+    <div class="snapshot-panel" id="snapshot-panel">
+      <div class="snapshot-title">Snapshot</div>
+      <div class="snapshot-count" id="snapshot-count">—</div>
+      <div class="snapshot-sub" id="snapshot-sub">decisions at this point in time</div>
+    </div>
+
+    <div id="timeline-container">
+      <div class="loading" id="loading-msg">Loading timeline…</div>
+      <div class="timeline-track" id="timeline-track" style="display:none"></div>
+      <div class="empty-state" id="empty-state" style="display:none">
+        <div class="empty-icon">⏱</div>
+        <div class="empty-title">No timeline data</div>
+        <div class="empty-desc">Enter a topic above and click → to explore decision history.</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+let allItems = [];
+let allDates = [];
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+  } catch { return iso.slice(0, 10); }
+}
+
+async function loadTimeline() {
+  const topic = document.getElementById('topic-input').value.trim();
+  document.getElementById('loading-msg').style.display = '';
+  document.getElementById('timeline-track').style.display = 'none';
+  document.getElementById('empty-state').style.display = 'none';
+
+  try {
+    const url = '/api/timeline' + (topic ? `?topic=${encodeURIComponent(topic)}` : '');
+    const data = await fetch(url).then(r => r.json());
+    allItems = data.timeline || data.items || [];
+    allDates = allItems.map(i => i.created_at).filter(Boolean).sort();
+    renderTimeline(allItems);
+  } catch(e) {
+    document.getElementById('loading-msg').style.display = 'none';
+    document.getElementById('empty-state').style.display = '';
+  }
+}
+
+function renderTimeline(items) {
+  document.getElementById('loading-msg').style.display = 'none';
+  const track = document.getElementById('timeline-track');
+  const empty = document.getElementById('empty-state');
+
+  if (!items || items.length === 0) {
+    track.style.display = 'none';
+    empty.style.display = '';
+    return;
+  }
+
+  track.style.display = '';
+  empty.style.display = 'none';
+  track.innerHTML = '';
+
+  items.forEach((item, i) => {
+    const isValid = item.valid !== false;
+    const div = document.createElement('div');
+    div.className = 'tl-item';
+    div.innerHTML = `
+      <div class="tl-dot ${isValid ? '' : 'invalid'}"></div>
+      <div class="tl-card" onclick="toggleCard(this)">
+        <div class="tl-header">
+          <div class="tl-meta">
+            <div class="tl-title">${escHtml(item.title || item.name || 'Decision')}</div>
+            <div class="tl-date">${fmtDate(item.created_at)}</div>
+          </div>
+          <div class="tl-badge ${isValid ? 'valid' : 'invalid'}">${isValid ? 'Active' : 'Superseded'}</div>
+          <div class="tl-chevron">▾</div>
+        </div>
+        <div class="tl-body">
+          <div class="tl-body-inner">${escHtml(item.content || '—')}</div>
+          ${item.superseded_note ? `<div class="tl-superseded">⚠ ${escHtml(item.superseded_note)}</div>` : ''}
+        </div>
+      </div>
+    `;
+    track.appendChild(div);
+  });
+
+  // Update snapshot
+  const panel = document.getElementById('snapshot-panel');
+  panel.classList.add('visible');
+  document.getElementById('snapshot-count').textContent = items.length;
+  document.getElementById('snapshot-sub').textContent = `decision${items.length !== 1 ? 's' : ''} in this view`;
+}
+
+function toggleCard(card) {
+  card.classList.toggle('expanded');
+}
+
+function filterByDate(pct) {
+  if (!allDates.length) return;
+  const label = document.getElementById('scrubber-date-label');
+  if (pct >= 100) {
+    label.textContent = 'All time';
+    renderTimeline(allItems);
+    return;
+  }
+  const idx = Math.floor((pct / 100) * (allDates.length - 1));
+  const cutoff = allDates[idx];
+  label.textContent = fmtDate(cutoff);
+  const filtered = allItems.filter(i => !i.created_at || i.created_at <= cutoff);
+  renderTimeline(filtered);
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Boot
+window.addEventListener('load', loadTimeline);
+</script>
+<script>
+// Sidebar dynamic data
+(async function() {
+  try {
+    const stats = await fetch('/api/stats').then(r => r.json());
+    const el1 = document.getElementById('sb-decisions-badge');
+    if (el1) el1.textContent = stats.decisions || '—';
+    const el4 = document.getElementById('sb-compliance-badge');
+    if (el4) el4.textContent = stats.injections_total || '—';
+    const agents = await fetch('/api/agents').then(r => r.json());
+    const active = (agents.agents || []).filter(a => a.status === 'active').length;
+    const dotEl = document.getElementById('sb-agent-dot');
+    const txtEl = document.getElementById('sb-agent-text');
+    if (dotEl) dotEl.style.color = active > 0 ? 'var(--green)' : 'var(--text-dim)';
+    if (txtEl) txtEl.textContent = `${active} agent${active !== 1 ? 's' : ''} live`;
+    if (stats.repo_name) {
+      const rn = document.getElementById('sb-repo-name');
+      if (rn) rn.textContent = stats.repo_name;
+    }
+  } catch(e) {}
+})();
+</script>
+</body>
+</html>

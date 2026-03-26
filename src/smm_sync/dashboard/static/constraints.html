@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Constraints — CaaS</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⬡</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.0/index.min.css">
+<style>
+  :root {
+    --bg: #fafaf8; --surface: #ffffff; --surface-2: #f4f4f0;
+    --border: #e8e5e0; --border-dark: #d4d0ca;
+    --text: #1a1917; --text-mid: #44403c; --text-muted: #78716c; --text-dim: #a8a29e;
+    --accent: #2563eb; --accent-light: #eff6ff; --accent-border: #bfdbfe;
+    --green: #16a34a; --green-light: #f0fdf4; --green-border: #bbf7d0;
+    --amber: #d97706; --amber-light: #fffbeb; --amber-border: #fde68a;
+    --red: #dc2626; --red-light: #fef2f2; --red-border: #fecaca;
+    --purple: #7c3aed; --purple-light: #f5f3ff; --purple-border: #ddd6fe;
+    --surface-3: #eeede9;
+    --border-2: #d4d0ca;
+    --mono: 'JetBrains Mono', 'Fira Code', monospace;
+    --serif: 'Instrument Serif', Georgia, serif;
+    --sans: 'Geist', system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Geist', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; font-size: 14px; }
+  .sidebar { width: 208px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: 50; }
+  .logo { padding: 20px 18px 16px; border-bottom: 1px solid var(--border); }
+  .logo-wordmark { font-family: var(--serif); font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 8px; letter-spacing: -0.5px; }
+  .logo-icon { width: 28px; height: 28px; background: var(--accent); border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 13px; color: white; font-weight: 700; }
+  .logo-sub { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .nav { flex: 1; padding: 10px 8px; overflow-y: auto; }
+  .nav-section { margin-bottom: 16px; }
+  .nav-label { font-size: 10px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; color: var(--text-dim); padding: 0 10px; margin-bottom: 3px; }
+  .nav-item { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 7px; cursor: pointer; font-size: 13px; color: var(--text-muted); transition: all 0.12s; }
+  .nav-item:hover { background: var(--surface-2); color: var(--text); }
+  .nav-item.active { color: var(--accent); font-weight: 500; background: transparent; border-left: 2px solid var(--accent); border-radius: 0 6px 6px 0; padding-left: 7px; }
+  .nav-icon { font-size: 14px; width: 18px; text-align: center; }
+  .nav-badge { margin-left: auto; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 10px; background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); }
+  .nav-badge.warn { background: var(--amber-light); color: var(--amber); border-color: var(--amber-border); }
+  .nav-badge.blue { background: var(--accent-light); color: var(--accent); border-color: var(--accent-border); }
+  .nav-soon { margin-left: auto; font-size: 9px; padding: 1px 5px; border-radius: 4px; background: var(--surface-2); color: var(--text-dim); }
+  .sidebar-footer { padding: 12px; border-top: 1px solid var(--border); }
+  .main { margin-left: 208px; flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+  .topbar { height: 48px; border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 24px; gap: 10px; background: var(--surface); position: sticky; top: 0; z-index: 40; }
+  .topbar-title { font-family: var(--serif); font-size: 15px; font-weight: 600; flex: 1; }
+  .btn { padding: 7px 14px; border-radius: 7px; font-size: 12px; font-family: 'Geist', sans-serif; font-weight: 500; cursor: pointer; border: none; transition: all 0.12s; display: inline-flex; align-items: center; gap: 5px; text-decoration: none; }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-primary:hover { background: #1d4ed8; }
+  .btn-outline { background: transparent; color: var(--text-mid); border: 1px solid var(--border-dark); }
+  .btn-outline:hover { background: var(--surface-2); }
+  .btn-ghost { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
+  .btn-ghost:hover { color: var(--text); border-color: var(--border-dark); }
+  .content { flex: 1; padding: 20px 24px; overflow-y: auto; }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+  .panel-header { padding: 11px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .panel-title { font-family: var(--serif); font-size: 13px; font-weight: 600; }
+  .panel-actions { display: flex; gap: 6px; align-items: center; }
+  .panel-count { font-size: 11px; color: var(--text-dim); background: var(--surface-2); padding: 2px 7px; border-radius: 20px; border: 1px solid var(--border); }
+  .constraint-item { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; gap: 12px; align-items: flex-start; }
+  .constraint-item:last-child { border-bottom: none; }
+  .constraint-item:hover { background: var(--surface-2); }
+  .con-icon-r { width: 30px; height: 30px; border-radius: 6px; background: var(--red-light); border: 1px solid var(--red-border); display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; color: var(--red); }
+  .con-body { flex: 1; }
+  .con-title-r { font-size: 13px; font-weight: 600; margin-bottom: 4px; line-height: 1.4; }
+  .con-rationale { font-size: 11px; color: var(--text-muted); line-height: 1.5; margin-bottom: 6px; }
+  .con-tags { display: flex; gap: 4px; flex-wrap: wrap; }
+  .tag { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 500; border: 1px solid transparent; }
+  .tag-constraint { background: var(--red-light); color: var(--red); border-color: var(--red-border); }
+  .tag-manual { background: var(--accent-light); color: var(--accent); border-color: var(--accent-border); }
+  .confidence-pill { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 20px; flex-shrink: 0; align-self: center; }
+  .conf-high { background: var(--green-light); color: var(--green); border: 1px solid var(--green-border); }
+  .conf-mid { background: var(--amber-light); color: var(--amber); border: 1px solid var(--amber-border); }
+  .conf-low { background: var(--red-light); color: var(--red); border: 1px solid var(--red-border); }
+  .empty-state { text-align: center; padding: 40px 20px; color: var(--text-dim); }
+  .empty-icon { font-size: 36px; margin-bottom: 10px; opacity: 0.4; }
+  .empty-title { font-family: var(--serif); font-size: 16px; font-weight: 600; color: var(--text-muted); margin-bottom: 5px; }
+  .empty-desc { font-size: 12px; color: var(--text-dim); line-height: 1.6; }
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--text); color: white; padding: 10px 18px; border-radius: 8px; font-size: 12px; opacity: 0; transition: all 0.3s; z-index: 1000; pointer-events: none; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  /* Modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.35); display: none; align-items: center; justify-content: center; z-index: 200; backdrop-filter: blur(2px); }
+  .modal-overlay.open { display: flex; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; width: 480px; max-height: 90vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.18); animation: modalIn 0.2s ease; }
+  @keyframes modalIn { from{opacity:0;transform:scale(0.96) translateY(8px)} to{opacity:1;transform:scale(1) translateY(0)} }
+  .modal-header { padding: 20px 24px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .modal-title { font-family: var(--serif); font-size: 18px; font-weight: 600; }
+  .modal-close { font-size: 22px; color: var(--text-dim); cursor: pointer; line-height: 1; background: none; border: none; }
+  .modal-body { padding: 20px 24px; }
+  .modal-footer { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; gap: 10px; }
+  .form-group { margin-bottom: 16px; }
+  .form-label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px; color: var(--text); }
+  .form-hint { display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 6px; line-height: 1.5; }
+  .form-input { width: 100%; padding: 8px 10px; border: 1px solid var(--border-dark); border-radius: 6px; font-size: 13px; font-family: 'Geist', sans-serif; background: var(--surface); color: var(--text); outline: none; transition: border-color 0.15s; }
+  .form-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); }
+  textarea.form-input { resize: vertical; min-height: 60px; }
+  ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: var(--border-dark); border-radius: 10px; }
+</style>
+</head>
+<body>
+<div class="toast" id="toast"></div>
+
+<!-- Add Constraint Modal -->
+<div class="modal-overlay" id="add-constraint-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Add a Constraint</div>
+      <button class="modal-close" onclick="closeModal('add-constraint-modal')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Constraint *</label>
+        <span class="form-hint">A rule that must never be broken.</span>
+        <input class="form-input" id="constraint-text" placeholder="e.g. Never expose raw MCP to enterprise customers" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Rationale *</label>
+        <textarea class="form-input" id="constraint-rationale" rows="2" placeholder="Why does this rule exist?"></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Scope keywords</label>
+        <span class="form-hint">Comma-separated. This constraint surfaces when agents query these topics.</span>
+        <input class="form-input" id="constraint-scope" placeholder="MCP, enterprise, security" />
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('add-constraint-modal')">Cancel</button>
+      <button class="btn btn-primary" id="save-constraint-btn" onclick="submitConstraint()">Save Constraint</button>
+    </div>
+  </div>
+</div>
+
+<aside class="sidebar">
+  <div class="logo" style="padding:16px 14px 12px;border-bottom:1px solid var(--border)">
+    <div class="logo-wordmark" style="font-family:var(--serif);font-size:19px;font-weight:600;display:flex;align-items:center;gap:8px;letter-spacing:-0.3px">
+      <div class="logo-icon" style="width:26px;height:26px;background:var(--accent);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;color:white;font-weight:700;flex-shrink:0">C</div>
+      CaaS
+    </div>
+    <div style="font-size:11px;color:var(--text-dim);margin-top:2px;padding-left:34px">context-as-a-service</div>
+  </div>
+  <div style="padding:8px 12px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;align-items:center;justify-content:space-between;font-size:12px;font-weight:500;color:var(--text-mid)">
+    <span id="sb-repo-name">smm-sync</span>
+    <span style="color:var(--text-dim)">⌄</span>
+  </div>
+  <nav class="nav">
+    <div class="nav-section">
+      <div class="nav-label">OVERVIEW</div>
+      <a class="nav-item" href="/" style="text-decoration:none"><span class="nav-icon">◈</span><span>Dashboard</span></a>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">KNOWLEDGE</div>
+      <a class="nav-item" href="/decisions" style="text-decoration:none"><span class="nav-icon">◇</span><span>All Decisions</span><span class="nav-badge" id="sb-decisions-badge">—</span></a>
+      <a class="nav-item" href="/graph" style="text-decoration:none"><span class="nav-icon">⬡</span><span>Decision Graph</span></a>
+      <a class="nav-item" href="/board" style="text-decoration:none"><span class="nav-icon">⊞</span><span>Decision Board</span><span class="nav-badge" id="sb-board-badge">—</span></a>
+      <a class="nav-item" href="/timeline" style="text-decoration:none"><span class="nav-icon">⏱</span><span>Time-Travel</span></a>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">COMPLIANCE</div>
+      <a class="nav-item active" href="/compliance" style="text-decoration:none"><span class="nav-icon">⊟</span><span>Audit Trail</span><span class="nav-badge" id="sb-compliance-badge">—</span></a>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">CAPTURE</div>
+      <a class="nav-item" href="#" style="text-decoration:none"><span class="nav-icon">⑂</span><span>GitHub</span><span class="nav-badge blue" id="sb-github-badge">—</span></a>
+      <a class="nav-item" href="#" style="text-decoration:none"><span class="nav-icon">#</span><span>Slack</span><span class="nav-soon">soon</span></a>
+    </div>
+  </nav>
+  <div class="sidebar-footer">
+    <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted)">
+      <span id="sb-agent-dot" style="color:var(--text-dim);font-size:8px">●</span>
+      <span id="sb-agent-text">0 agents live</span>
+      <span style="margin-left:auto;display:flex;gap:8px;color:var(--text-dim)">
+        <span style="cursor:pointer" title="Settings">⚙</span>
+        <span style="cursor:pointer" title="Status">◎</span>
+      </span>
+    </div>
+  </div>
+</aside>
+
+<main class="main">
+  <div class="topbar">
+    <div class="topbar-title">Constraints</div>
+    <a href="/" class="btn btn-ghost">← Dashboard</a>
+    <button class="btn btn-primary" onclick="openModal('add-constraint-modal')">⚑ Add Constraint</button>
+  </div>
+  <div class="content">
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Non-negotiable Constraints</span>
+        <span class="panel-count" id="count-badge" style="color:var(--red);background:var(--red-light);border-color:var(--red-border)">loading...</span>
+      </div>
+      <div id="constraints-list">
+        <div class="empty-state"><div class="empty-icon">⚑</div><div class="empty-title">Loading constraints...</div></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+let allConstraints = [];
+
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(el => {
+  el.addEventListener('click', e => { if (e.target === el) el.classList.remove('open'); });
+});
+
+function showToast(msg) {
+  const t = document.getElementById('toast'); t.textContent = msg;
+  t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+function confClass(c) {
+  if (c >= 0.85) return 'conf-high';
+  if (c >= 0.70) return 'conf-mid';
+  return 'conf-low';
+}
+
+function renderConstraints() {
+  const list = document.getElementById('constraints-list');
+  document.getElementById('count-badge').textContent = `${allConstraints.length} active`;
+  document.getElementById('con-badge').textContent = allConstraints.length;
+
+  if (allConstraints.length === 0) {
+    list.innerHTML = '<div class="empty-state"><div class="empty-icon">⚑</div><div class="empty-title">No constraints yet</div><div class="empty-desc">Add non-negotiable rules that must never be broken.</div></div>';
+    return;
+  }
+
+  list.innerHTML = allConstraints.map(d => {
+    const conf = d.confidence || 0;
+    const rationale = (d.rationale || d.content || '').slice(0, 150);
+    return `<div class="constraint-item">
+      <div class="con-icon-r">⚑</div>
+      <div class="con-body">
+        <div class="con-title-r">${d.title}</div>
+        ${rationale ? `<div class="con-rationale">${rationale}${rationale.length >= 150 ? '...' : ''}</div>` : ''}
+        <div class="con-tags"><span class="tag tag-constraint">constraint</span><span class="tag tag-manual">${d.source_type || 'manual'}</span></div>
+      </div>
+      <span class="confidence-pill ${confClass(conf)}">${conf.toFixed ? conf.toFixed(2) : conf}</span>
+    </div>`;
+  }).join('');
+}
+
+async function submitConstraint() {
+  const text = document.getElementById('constraint-text').value.trim();
+  const rationale = document.getElementById('constraint-rationale').value.trim();
+  const scope = document.getElementById('constraint-scope').value.trim();
+  if (!text || !rationale) { showToast('Constraint text and rationale are required'); return; }
+  const btn = document.getElementById('save-constraint-btn');
+  btn.disabled = true; btn.textContent = 'Saving...';
+  try {
+    const content = rationale + (scope ? `\n\nScope: ${scope}` : '');
+    const res = await fetch('/api/decisions', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: text, rationale: content, alternatives: [], type: 'architectural', is_constraint: true, source_type: 'manual' })
+    });
+    if (res.ok) {
+      closeModal('add-constraint-modal');
+      document.getElementById('constraint-text').value = '';
+      document.getElementById('constraint-rationale').value = '';
+      document.getElementById('constraint-scope').value = '';
+      showToast('Constraint saved to knowledge graph');
+      await loadConstraints();
+    } else {
+      const err = await res.json().catch(() => ({}));
+      showToast('Failed to save — ' + (err.detail || 'check API key'));
+    }
+  } catch (e) { showToast('Error: ' + e.message); }
+  finally { btn.disabled = false; btn.textContent = 'Save Constraint'; }
+}
+
+async function loadConstraints() {
+  try {
+    const data = await fetch('/api/decisions?limit=200').then(r => r.json());
+    allConstraints = (data.decisions || []).filter(d => d.is_constraint || d.type === 'constraint');
+    renderConstraints();
+  } catch (e) {
+    document.getElementById('constraints-list').innerHTML = '<div class="empty-state"><div class="empty-icon">⚠</div><div class="empty-title">Could not load constraints</div></div>';
+  }
+}
+
+window.addEventListener('load', loadConstraints);
+</script>
+<script>
+// Sidebar dynamic data
+(async function() {
+  try {
+    const stats = await fetch('/api/stats').then(r => r.json());
+    const el1 = document.getElementById('sb-decisions-badge');
+    if (el1) el1.textContent = stats.decisions || '—';
+    const el4 = document.getElementById('sb-compliance-badge');
+    if (el4) el4.textContent = stats.injections_total || '—';
+    const agents = await fetch('/api/agents').then(r => r.json());
+    const active = (agents.agents || []).filter(a => a.status === 'active').length;
+    const dotEl = document.getElementById('sb-agent-dot');
+    const txtEl = document.getElementById('sb-agent-text');
+    if (dotEl) dotEl.style.color = active > 0 ? 'var(--green)' : 'var(--text-dim)';
+    if (txtEl) txtEl.textContent = `${active} agent${active !== 1 ? 's' : ''} live`;
+    if (stats.repo_name) {
+      const rn = document.getElementById('sb-repo-name');
+      if (rn) rn.textContent = stats.repo_name;
+    }
+  } catch(e) {}
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,79 @@
+{
+  "pending": [
+    {
+      "title": "Add Slack Events API connector",
+      "type": "architectural",
+      "confidence": 0.88,
+      "source_type": "github_pr",
+      "source_pr": "52",
+      "author": "varunajaytawde",
+      "summary": "Passive Slack capture using Events API. Same two-stage extraction as GitHub capture.",
+      "diff": [
+        [
+          "add",
+          "class SlackCapture(BaseCapture):"
+        ],
+        [
+          "add",
+          "    \"\"\"Passive Slack decision capture.\"\"\""
+        ],
+        [
+          "neutral",
+          "    # Events API, not RTM (deprecated)"
+        ]
+      ],
+      "deja_vu": null,
+      "minutes_ago": 8
+    },
+    {
+      "title": "Switch state management to LWW CRDT",
+      "type": "architectural",
+      "confidence": 0.7,
+      "source_type": "github_pr",
+      "source_pr": "53",
+      "author": "dev-2",
+      "summary": "Proposes LWW CRDT for concurrent agent state updates. Claims simpler than propose-validate-commit.",
+      "diff": [
+        [
+          "remove",
+          "async def propose(state, change):"
+        ],
+        [
+          "add",
+          "def apply_lww(state, change, timestamp):"
+        ],
+        [
+          "add",
+          "    state[change.key] = change.value"
+        ]
+      ],
+      "deja_vu": "LWW CRDT was explicitly rejected in Decision #1 \u2014 silently discards work.",
+      "minutes_ago": 47
+    },
+    {
+      "title": "smm install \u2014 zero-config onboarding wizard",
+      "type": "technical",
+      "confidence": 0.92,
+      "source_type": "github_pr",
+      "source_pr": "54",
+      "author": "varunajaytawde",
+      "summary": "Single interactive command for full CaaS onboarding. Validates keys, detects remote, runs capture.",
+      "diff": [
+        [
+          "add",
+          "@cli.command('install')"
+        ],
+        [
+          "add",
+          "def install():"
+        ],
+        [
+          "neutral",
+          "    # Prompts keys, validates, runs capture"
+        ]
+      ],
+      "deja_vu": null,
+      "minutes_ago": 120
+    }
+  ]
+}

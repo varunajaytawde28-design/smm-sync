@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3:*)",
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(smm seed-graph:*)",
+      "Bash(pip show:*)",
+      "Bash(conda install:*)",
+      "Bash(echo:*)",
+      "Bash(env:*)",
+      "Bash(pytest:*)",
+      "Bash(curl:*)",
+      "Bash(smm query:*)",
+      "mcp__smm-sync__get_project_context",
+      "mcp__smm-sync__read_context",
+      "Bash(smm capture:*)",
+      "Bash(wc:*)",
+      "Bash(ls:*)",
+      "Bash(rm:*)",
+      "Bash(grep:*)",
+      "mcp__smm-sync__query_decisions",
+      "Bash(smm setup:*)",
+      "Bash(git stash:*)",
+      "Bash(lsof:*)",
+      "Bash(kill 56939:*)",
+      "Bash(do echo:*)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "smm-sync"
+  ]
+}
