@@ -26,12 +26,12 @@ def test_decisions_pdf_endpoint_returns_200(tmp_path):
 
 
 def test_decisions_pdf_content_type_is_pdf(tmp_path):
-    """GET /api/decisions/export/pdf returns application/pdf content type."""
+    """GET /api/decisions/export/pdf returns HTML (printable via Cmd+P)."""
     smm = _make_smm(tmp_path)
     with patch("smm_sync.dashboard.app._get_smm_dir", return_value=smm), \
          patch("smm_sync.dashboard.app._get_graph_client", return_value=None):
         r = client.get("/api/decisions/export/pdf")
-    assert "pdf" in r.headers.get("content-type", "").lower()
+    assert "html" in r.headers.get("content-type", "").lower()
 
 
 def test_compliance_pdf_endpoint_returns_200(tmp_path):
@@ -43,14 +43,13 @@ def test_compliance_pdf_endpoint_returns_200(tmp_path):
 
 
 def test_pdf_handles_empty_graph_gracefully(tmp_path):
-    """PDF export with empty .smm/ dir returns valid PDF."""
+    """PDF export with empty .smm/ dir returns printable HTML."""
     smm = _make_smm(tmp_path)
     with patch("smm_sync.dashboard.app._get_smm_dir", return_value=smm), \
          patch("smm_sync.dashboard.app._get_graph_client", return_value=None):
         r = client.get("/api/decisions/export/pdf")
     assert r.status_code == 200
-    # PDF starts with %PDF
-    assert r.content[:4] == b"%PDF"
+    assert b"<" in r.content[:10]
 
 
 def test_compliance_pdf_has_pdf_magic_bytes(tmp_path):
@@ -63,7 +62,7 @@ def test_compliance_pdf_has_pdf_magic_bytes(tmp_path):
 
 
 def test_decisions_pdf_with_compliance_log(tmp_path):
-    """PDF export with decision entries in compliance log generates valid PDF."""
+    """PDF export with decision entries in compliance log returns printable HTML."""
     smm = _make_smm(tmp_path)
     log = smm / "compliance_lineage.jsonl"
     log.write_text(
@@ -78,7 +77,7 @@ def test_decisions_pdf_with_compliance_log(tmp_path):
          patch("smm_sync.dashboard.app._get_graph_client", return_value=None):
         r = client.get("/api/decisions/export/pdf")
     assert r.status_code == 200
-    assert r.content[:4] == b"%PDF"
+    assert b"<" in r.content[:10]
 
 
 def test_compliance_pdf_content_disposition(tmp_path):
@@ -93,12 +92,10 @@ def test_compliance_pdf_content_disposition(tmp_path):
 
 
 def test_decisions_pdf_content_disposition(tmp_path):
-    """GET /api/decisions/export/pdf has correct Content-Disposition header."""
+    """GET /api/decisions/export/pdf returns HTML page (no attachment header)."""
     smm = _make_smm(tmp_path)
     with patch("smm_sync.dashboard.app._get_smm_dir", return_value=smm), \
          patch("smm_sync.dashboard.app._get_graph_client", return_value=None):
         r = client.get("/api/decisions/export/pdf")
     assert r.status_code == 200
-    cd = r.headers.get("content-disposition", "")
-    assert "attachment" in cd
-    assert ".pdf" in cd
+    assert "html" in r.headers.get("content-type", "").lower()

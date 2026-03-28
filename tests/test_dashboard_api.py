@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -43,7 +44,7 @@ def _injection(
 ) -> dict:
     ts = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
     return {
-        "entry_id": "abc",
+        "entry_id": str(uuid.uuid4()),
         "timestamp": ts,
         "event_type": "context_injection",
         "agent": agent,
@@ -377,8 +378,8 @@ def test_compliance_returns_entries(tmp_path):
 def test_compliance_filter_by_session(tmp_path):
     """GET /api/compliance?session_id= filters correctly."""
     smm = _make_compliance_log(tmp_path, [
-        _injection(session_id="s1"),
-        _injection(session_id="s2"),
+        _injection(session_id="s1", agent="claude-code", minutes_ago=5),
+        _injection(session_id="s2", agent="cursor-agent", minutes_ago=10),
     ])
 
     with patch("smm_sync.dashboard.app._get_smm_dir", return_value=smm):
