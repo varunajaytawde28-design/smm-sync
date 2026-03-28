@@ -58,7 +58,7 @@ def sanitize_content(content: str) -> tuple[str, bool]:
     - Never raises — silent sanitization only
     """
     if not content:
-        return content, False
+        return "", False
 
     flagged = False
     lines = content.split('\n')

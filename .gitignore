@@ -10,25 +10,9 @@ build/
 venv/
 env/
 
-# SMM-Sync runtime state
-.smm/events.jsonl
-.smm/state.json
-.smm/parsed_context.json
-.smm/locks/
-.smm/history/
-
-# Context graph database — never commit, run `smm seed-graph` to populate
-.smm/graph/
-
-# Capture state — tracks last-seen IDs, not human config, do not commit
-.smm/capture_state.json
-
-# Compliance audit log — append-only, never commit (contains agent session data)
-.smm/compliance_lineage.jsonl
-
-# Dashboard runtime state — never commit
-.smm/killed_sessions.json
-.smm/contradictions.jsonl
+# SMM-Sync runtime state — ignore all except config files
+.smm/*
+!.smm/github.yml
 
 # pytest
 .pytest_cache/
@@ -41,3 +25,6 @@ htmlcov/
 # IDE
 .idea/
 .vscode/
+
+# Configuration files with secrets
+.mcp.json

@@ -134,8 +134,8 @@
     </div>
     <div class="nav-section">
       <div class="nav-label">CAPTURE</div>
-      <a class="nav-item" href="#" style="text-decoration:none"><span class="nav-icon">⑂</span><span>GitHub</span><span class="nav-badge blue" id="sb-github-badge">—</span></a>
-      <a class="nav-item" href="#" style="text-decoration:none"><span class="nav-icon">#</span><span>Slack</span><span class="nav-soon">soon</span></a>
+      <span class="nav-item" style="cursor:default;opacity:0.55"><span class="nav-icon">⑂</span><span>GitHub</span><span class="nav-soon">soon</span></span>
+      <span class="nav-item" style="cursor:default;opacity:0.55"><span class="nav-icon">#</span><span>Slack</span><span class="nav-soon">soon</span></span>
     </div>
   </nav>
   <div class="sidebar-footer">
@@ -157,134 +157,22 @@
     ⏱ Time-Travel
   </div>
 
-  <div class="content">
-    <div class="scrubber-row">
-      <span class="scrubber-label">Topic:</span>
-      <input class="topic-input" id="topic-input" placeholder="e.g. file locking, graph db, auth..." value="">
-      <button class="btn btn-primary" onclick="loadTimeline()">→</button>
-      <span class="scrubber-label" style="margin-left:auto">Filter by date:</span>
-      <input type="range" class="date-scrubber" id="date-scrubber" min="0" max="100" value="100" oninput="filterByDate(this.value)">
-      <span class="scrubber-date" id="scrubber-date-label">All time</span>
-    </div>
-
-    <div class="snapshot-panel" id="snapshot-panel">
-      <div class="snapshot-title">Snapshot</div>
-      <div class="snapshot-count" id="snapshot-count">—</div>
-      <div class="snapshot-sub" id="snapshot-sub">decisions at this point in time</div>
-    </div>
-
-    <div id="timeline-container">
-      <div class="loading" id="loading-msg">Loading timeline…</div>
-      <div class="timeline-track" id="timeline-track" style="display:none"></div>
-      <div class="empty-state" id="empty-state" style="display:none">
-        <div class="empty-icon">⏱</div>
-        <div class="empty-title">No timeline data</div>
-        <div class="empty-desc">Enter a topic above and click → to explore decision history.</div>
+  <div class="content" style="display:flex;align-items:center;justify-content:center;min-height:60vh;">
+    <div style="text-align:center;max-width:400px;padding:40px 24px;">
+      <div style="font-size:48px;margin-bottom:20px;opacity:0.35">⏱</div>
+      <div style="font-family:var(--serif);font-size:26px;font-weight:600;letter-spacing:-0.5px;margin-bottom:10px;color:var(--text)">Coming Soon</div>
+      <div style="font-size:14px;color:var(--text-muted);line-height:1.6;margin-bottom:24px;">
+        Time-Travel lets you replay your decision history at any point in time — scrub backwards to see which decisions were active, which were superseded, and how your architecture evolved.
+      </div>
+      <div style="display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--text-dim);background:var(--surface-2);border:1px solid var(--border);border-radius:20px;padding:6px 14px;">
+        <span style="width:6px;height:6px;border-radius:50%;background:var(--amber);display:inline-block;"></span>
+        In development
       </div>
     </div>
   </div>
 </main>
 
 <script>
-let allItems = [];
-let allDates = [];
-
-function fmtDate(iso) {
-  if (!iso) return '—';
-  try {
-    return new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-  } catch { return iso.slice(0, 10); }
-}
-
-async function loadTimeline() {
-  const topic = document.getElementById('topic-input').value.trim();
-  document.getElementById('loading-msg').style.display = '';
-  document.getElementById('timeline-track').style.display = 'none';
-  document.getElementById('empty-state').style.display = 'none';
-
-  try {
-    const url = '/api/timeline' + (topic ? `?topic=${encodeURIComponent(topic)}` : '');
-    const data = await fetch(url).then(r => r.json());
-    allItems = data.timeline || data.items || [];
-    allDates = allItems.map(i => i.created_at).filter(Boolean).sort();
-    renderTimeline(allItems);
-  } catch(e) {
-    document.getElementById('loading-msg').style.display = 'none';
-    document.getElementById('empty-state').style.display = '';
-  }
-}
-
-function renderTimeline(items) {
-  document.getElementById('loading-msg').style.display = 'none';
-  const track = document.getElementById('timeline-track');
-  const empty = document.getElementById('empty-state');
-
-  if (!items || items.length === 0) {
-    track.style.display = 'none';
-    empty.style.display = '';
-    return;
-  }
-
-  track.style.display = '';
-  empty.style.display = 'none';
-  track.innerHTML = '';
-
-  items.forEach((item, i) => {
-    const isValid = item.valid !== false;
-    const div = document.createElement('div');
-    div.className = 'tl-item';
-    div.innerHTML = `
-      <div class="tl-dot ${isValid ? '' : 'invalid'}"></div>
-      <div class="tl-card" onclick="toggleCard(this)">
-        <div class="tl-header">
-          <div class="tl-meta">
-            <div class="tl-title">${escHtml(item.title || item.name || 'Decision')}</div>
-            <div class="tl-date">${fmtDate(item.created_at)}</div>
-          </div>
-          <div class="tl-badge ${isValid ? 'valid' : 'invalid'}">${isValid ? 'Active' : 'Superseded'}</div>
-          <div class="tl-chevron">▾</div>
-        </div>
-        <div class="tl-body">
-          <div class="tl-body-inner">${escHtml(item.content || '—')}</div>
-          ${item.superseded_note ? `<div class="tl-superseded">⚠ ${escHtml(item.superseded_note)}</div>` : ''}
-        </div>
-      </div>
-    `;
-    track.appendChild(div);
-  });
-
-  // Update snapshot
-  const panel = document.getElementById('snapshot-panel');
-  panel.classList.add('visible');
-  document.getElementById('snapshot-count').textContent = items.length;
-  document.getElementById('snapshot-sub').textContent = `decision${items.length !== 1 ? 's' : ''} in this view`;
-}
-
-function toggleCard(card) {
-  card.classList.toggle('expanded');
-}
-
-function filterByDate(pct) {
-  if (!allDates.length) return;
-  const label = document.getElementById('scrubber-date-label');
-  if (pct >= 100) {
-    label.textContent = 'All time';
-    renderTimeline(allItems);
-    return;
-  }
-  const idx = Math.floor((pct / 100) * (allDates.length - 1));
-  const cutoff = allDates[idx];
-  label.textContent = fmtDate(cutoff);
-  const filtered = allItems.filter(i => !i.created_at || i.created_at <= cutoff);
-  renderTimeline(filtered);
-}
-
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-// Boot
-window.addEventListener('load', loadTimeline);
 </script>
 <script>
 // Sidebar dynamic data

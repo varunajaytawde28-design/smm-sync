@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -32,12 +32,16 @@ dev = ["pytest>=8.0", "pytest-cov>=4.0"]
 
 [project.scripts]
 smm = "smm_sync.cli:main"
+smm-fast-write = "smm_sync:_bin_stub"
+
+[tool.maturin]
+bindings = "bin"
+manifest-path = "rust_cli/Cargo.toml"
+python-source = "src"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.setuptools.package-data]
-"smm_sync" = ["templates/*.j2"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -26,17 +26,23 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
+import re
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+from smm_sync.config import DASHBOARD_PORT
 from smm_sync.coordinator import claim as _coord_claim
 from smm_sync.coordinator import is_claimed, release as _coord_release
 from smm_sync.ingester import ingest, load_parsed_context
 from smm_sync.state import get_current_state, propose, read_events
 
+logger = logging.getLogger(__name__)
 mcp = FastMCP("smm-sync")
 _smm_dir: Path | None = None
 _graph_client = None  # Lazy-initialised GraphClient
@@ -90,7 +96,161 @@ def _get_agents_md() -> Path:
     return _get_smm_dir().parent / "AGENTS.md"
 
 
-@mcp.tool()
+# ---------------------------------------------------------------------------
+# Architectural violation detection
+# ---------------------------------------------------------------------------
+
+# Maps superseded-decision keywords to grep patterns and file extensions.
+_KEYWORD_PATTERNS: dict[str, dict] = {
+    "sqlite": {"grep": ["sqlite", "sqlite3"], "find": ["*.db", "*.sqlite"]},
+    "postgresql": {"grep": ["psycopg2", "postgresql"], "find": []},
+    "celery": {"grep": ["celery", "Celery"], "find": []},
+    "backgroundtasks": {"grep": ["BackgroundTasks", "background_tasks"], "find": []},
+    "api_key": {"grep": ["X-API-Key", "api_key", "drone_secret"], "find": []},
+    "jwt": {"grep": ["python-jose", "jwt"], "find": []},
+}
+
+_VERIFICATION_PROTOCOL_MSG = (
+    "⚠ VERIFICATION PROTOCOL: You are connected to a REAL terminal.\n"
+    "THOUGHT ≠ ACTION: Writing 'I checked' in your reasoning does nothing.\n"
+    "You MUST execute the actual bash commands to verify compliance.\n"
+    "Do NOT state 'All items satisfied' without running the verification "
+    "commands and pasting their output."
+)
+
+
+def _extract_keywords(title: str) -> list[str]:
+    """Extract recognised technical keywords from a decision title.
+
+    Args:
+        title: Decision title to scan (e.g. "SQLite via SQLAlchemy ORM").
+
+    Returns:
+        List of lowercase keyword strings that appear in _KEYWORD_PATTERNS.
+    """
+    words = re.split(r"[\s\-_/]+", title.lower())
+    return [w for w in words if w in _KEYWORD_PATTERNS]
+
+
+def _run_verification(smm_dir: Path) -> list[str]:
+    """Scan the codebase for architectural violations from resolved contradictions.
+
+    Reads .smm/contradiction_index.json, finds resolved pairs, extracts
+    keywords from SUPERSEDED decision titles, then runs grep/find against
+    the project root.  Each subprocess is limited to 5 seconds.
+
+    Args:
+        smm_dir: Path to the .smm directory.
+
+    Returns:
+        List of human-readable violation strings.  Empty means clean.
+    """
+    idx_path = smm_dir / "contradiction_index.json"
+    if not idx_path.exists():
+        return []
+
+    try:
+        idx = json.loads(idx_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+    resolved_pairs = [p for p in idx.get("pairs", []) if p.get("status") == "resolved"]
+    if not resolved_pairs:
+        return []
+
+    project_root = str(smm_dir.parent)
+    violations: list[str] = []
+
+    for pair in resolved_pairs:
+        loser = pair.get("decision_b_title", "")   # superseded decision
+        winner = pair.get("decision_a_title", "")  # kept decision
+        if not loser:
+            continue
+
+        keywords = _extract_keywords(loser)
+        if not keywords:
+            continue
+
+        for kw in keywords:
+            patterns = _KEYWORD_PATTERNS[kw]
+
+            for grep_pat in patterns.get("grep", []):
+                try:
+                    result = subprocess.run(
+                        ["grep", "-rn", grep_pat, "--include=*.py", project_root],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    if result.returncode == 0 and result.stdout.strip():
+                        for line in result.stdout.strip().splitlines():
+                            violations.append(
+                                f"Code uses '{grep_pat}' (superseded by '{winner}'): "
+                                f"{line.strip()}"
+                            )
+                except (subprocess.TimeoutExpired, OSError) as e:
+                    logger.warning(f"Failed to search for pattern '{grep_pat}': {e}")
+
+            for file_pat in patterns.get("find", []):
+                try:
+                    result = subprocess.run(
+                        ["find", project_root, "-name", file_pat],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    if result.returncode == 0 and result.stdout.strip():
+                        for fpath in result.stdout.strip().splitlines():
+                            violations.append(
+                                f"File '{fpath}' exists — DELETE it "
+                                f"(superseded by '{winner}')"
+                            )
+                except (subprocess.TimeoutExpired, OSError) as e:
+                    logger.warning(f"Failed to find files matching '{file_pat}': {e}")
+
+    return violations
+
+
+def _build_block_message(violations: list[str]) -> str:
+    """Format a BLOCKED error message listing violations and fix commands.
+
+    Args:
+        violations: List of violation strings from _run_verification().
+
+    Returns:
+        Human-readable blocking message for the agent.
+    """
+    numbered = "\n".join(f"{i}. {v}" for i, v in enumerate(violations, 1))
+
+    # Derive fix commands: rm for file violations, grep reminder for code violations
+    fix_cmds: list[str] = []
+    for v in violations:
+        if v.startswith("File '") and "DELETE" in v:
+            # Extract the file path between quotes
+            m = re.search(r"File '([^']+)'", v)
+            if m:
+                fix_cmds.append(f"rm {shlex.quote(m.group(1))}")
+        elif "Code uses '" in v:
+            m = re.search(r"Code uses '([^']+)'", v)
+            if m:
+                cmd = (
+                    f"grep -rn {shlex.quote(m.group(1))} --include='*.py' ."
+                )
+                if cmd not in fix_cmds:
+                    fix_cmds.append(cmd)
+
+    fix_section = "\n".join(fix_cmds) if fix_cmds else "Review violations above and remove superseded code."
+
+    return (
+        "BLOCKED: Architectural violations detected. You must fix these "
+        "BEFORE accessing project context.\n\n"
+        f"VIOLATIONS:\n{numbered}\n\n"
+        f"COMMANDS TO FIX:\n{fix_section}\n\n"
+        "After fixing, call get_project_context again."
+    )
+
+
+@mcp.tool(structured_output=False)
 def read_context() -> str:
     """Return current AGENTS.md content plus active coordination state.
 
@@ -136,7 +296,7 @@ def read_context() -> str:
     return agents_content + "\n".join(state_lines)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def claim_file(filepath: str, session_id: str, task: str = "") -> dict:
     """Atomically claim a file for exclusive editing.
 
@@ -168,7 +328,7 @@ def claim_file(filepath: str, session_id: str, task: str = "") -> dict:
     return {"success": True}
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def release_file(filepath: str, session_id: str) -> dict:
     """Release a claimed file.
 
@@ -193,7 +353,7 @@ def release_file(filepath: str, session_id: str) -> dict:
     return {"success": True}
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def refresh_context(session_id: str) -> dict:
     """Check if AGENTS.md changed; re-parse if so.
 
@@ -215,7 +375,7 @@ def refresh_context(session_id: str) -> dict:
         return {"changed": False, "reason": "AGENTS.md not found"}
 
     content = agents_md.read_text(encoding="utf-8")
-    new_hash = hashlib.md5(content.encode()).hexdigest()
+    new_hash = hashlib.sha256(content.encode()).hexdigest()
 
     result = propose(smm_dir, "context_refreshed", session_id, {
         "context_hash": new_hash,
@@ -336,7 +496,7 @@ def _time_saved_footer() -> str:
         return ""
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def query_decisions(
     query: str,
     project: str = "smm-sync",
@@ -412,7 +572,7 @@ async def query_decisions(
     return "\n".join(lines) + _time_saved_footer()
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def add_decision(
     title: str,
     content: str,
@@ -450,25 +610,42 @@ async def add_decision(
     if client is None:
         return {"success": False, "error": "Context graph unavailable."}
 
+    import os as _os
+    _use_local = not _os.environ.get("ANTHROPIC_API_KEY", "").strip()
     try:
-        decision_id = await client.add_decision(
-            title=title,
-            content=content,
-            rationale=rationale,
-            made_by=made_by,
-            project=project,
-            constraints=list(constraints),
-            alternatives=list(alternatives),
-            decision_type=decision_type,
-        )
+        if _use_local:
+            decision_id = await client.add_decision_local(
+                title=title,
+                content=content,
+                rationale=rationale,
+                made_by=made_by,
+                project=project,
+                constraints=list(constraints),
+                alternatives=list(alternatives),
+                decision_type=decision_type,
+            )
+        else:
+            decision_id = await client.add_decision(
+                title=title,
+                content=content,
+                rationale=rationale,
+                made_by=made_by,
+                project=project,
+                constraints=list(constraints),
+                alternatives=list(alternatives),
+                decision_type=decision_type,
+            )
         return {"success": True, "decision_id": decision_id}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def get_project_context(project: str = "smm-sync", session_id: str = "") -> str:
     """Get comprehensive project context: all active decisions, constraints, danger zones.
+
+    Primary source: .smm/decisions.jsonl (always current, written by smm add-decision).
+    Secondary source: Kuzu graph (for edge data; used as fallback when JSONL absent).
 
     Call this at the START of any coding session to ground yourself in the project's
     current state before making changes.
@@ -482,44 +659,223 @@ async def get_project_context(project: str = "smm-sync", session_id: str = "") -
     """
     if session_id and _is_session_killed(session_id):
         return _KILLED_MESSAGE
-    client = _get_graph_client()
-    if client is None:
-        return "Context graph unavailable. Run `smm seed-graph` first."
 
-    try:
-        decisions = await client.get_decisions(project=project)
-    except Exception as e:
-        return f"Failed to retrieve project context: {e}"
+    import json as _json
+    from datetime import datetime as _dt, timedelta, timezone as _tz
+    smm_dir = _get_smm_dir()
 
-    # Log to compliance lineage
-    logger = _get_lineage_logger()
-    if logger and decisions:
-        logger.log_context_injection(
-            query=f"get_project_context:{project}",
-            decisions_surfaced=[d.title for d in decisions],
-            agent="mcp-client",
-            tool_name="get_project_context",
-        )
+    # ── Enforcement: check for architectural violations before returning context ─
+    violations = _run_verification(smm_dir)
+    if violations:
+        raise RuntimeError(_build_block_message(violations))
 
-    if not decisions:
+    # ── Primary source: decisions.jsonl ──────────────────────────────────────
+    _jsonl_path = smm_dir / "decisions.jsonl"
+    _jsonl_rows: list[dict] = []
+    if _jsonl_path.exists():
+        for _raw in _jsonl_path.read_text(encoding="utf-8").splitlines():
+            _raw = _raw.strip()
+            if _raw:
+                try:
+                    _jsonl_rows.append(_json.loads(_raw))
+                except Exception as e:
+                    logger.warning(f"Failed to parse JSONL line '{_raw[:50]}...': {e}")
+
+    # Build decision metadata from JSONL when available, else fall back to Kuzu.
+    _type_counts: dict[str, int] = {}
+    _decision_meta: list[tuple[str, str, float]] = []  # (title, type, confidence)
+    _all_titles: list[str] = []
+    _all_rationales: list[tuple[str, str]] = []  # (title, rationale)
+
+    if _jsonl_rows:
+        for _jd in _jsonl_rows:
+            _dt_val = (_jd.get("type") or "technical").lower()
+            _conf = float(_jd.get("confidence") or 0.80)
+            _title = _jd.get("title") or ""
+            _rat = _jd.get("rationale") or ""
+            _type_counts[_dt_val] = _type_counts.get(_dt_val, 0) + 1
+            _decision_meta.append((_title, _dt_val, _conf))
+            _all_titles.append(_title)
+            _all_rationales.append((_title, _rat))
+        decisions_count = len(_jsonl_rows)
+    else:
+        # Fall back to Kuzu
+        client = _get_graph_client()
+        if client is None:
+            return "Context graph unavailable. Run `smm seed-graph` or `smm add-decision` first."
+        try:
+            decisions = await client.get_decisions(project=project)
+        except Exception as e:
+            return f"Failed to retrieve project context: {e}"
+
+        if not decisions:
+            return (
+                f"No decisions found for project {project!r}. "
+                "Run `smm seed-graph` to populate the graph, or use `smm add-decision`."
+            )
+
+        for d in decisions:
+            _content = (d.content or "").replace("\\n", "\n")
+            _dt_val = "architectural"
+            _conf = 0.80
+            for _ln in _content.splitlines():
+                if _ln.startswith("Decision type:"):
+                    _dt_val = _ln.split(":", 1)[1].strip().lower()
+                elif _ln.startswith("Confidence:"):
+                    try:
+                        _conf = float(_ln.split(":", 1)[1].strip())
+                    except Exception as e:
+                        logger.warning(f"Failed to parse confidence value from line '{_ln}': {e}")
+            _type_counts[_dt_val] = _type_counts.get(_dt_val, 0) + 1
+            _decision_meta.append((d.title or "", _dt_val, _conf))
+            _all_titles.append(d.title or "")
+            _rat = getattr(d, "rationale", "") or ""
+            _all_rationales.append((d.title or "", _rat))
+        decisions_count = len(decisions)
+
+        # Log to compliance lineage (Kuzu path only)
+        logger = _get_lineage_logger()
+        if logger and decisions:
+            logger.log_context_injection(
+                query=f"get_project_context:{project}",
+                decisions_surfaced=[d.title for d in decisions],
+                agent="mcp-client",
+                tool_name="get_project_context",
+            )
+
+    if not _decision_meta:
         return (
             f"No decisions found for project {project!r}. "
-            "Run `smm seed-graph` to populate the graph."
+            "Run `smm seed-graph` to populate the graph, or use `smm add-decision`."
         )
 
+    # Read active contradictions from contradictions.jsonl
+    active_contras: list[dict] = []
+    try:
+        contra_path = smm_dir / "contradictions.jsonl"
+        if contra_path.exists():
+            for _line in contra_path.read_text(encoding="utf-8").splitlines():
+                _line = _line.strip()
+                if _line:
+                    try:
+                        _c = _json.loads(_line)
+                        if not _c.get("resolved", False):
+                            active_contras.append(_c)
+                    except Exception as e:
+                        logger.warning(f"Failed to parse contradiction line '{_line[:50]}...': {e}")
+    except Exception as e:
+        logger.warning(f"Failed to read contradictions file: {e}")
+
+    # Header
+    _type_summary = ", ".join(f"{v} {k}" for k, v in sorted(_type_counts.items()))
     lines = [
-        f"# Project Context: {project}",
-        f"\n{len(decisions)} decisions recorded.\n",
-        "---",
+        "PROJECT CONTEXT:",
+        f"{decisions_count} decisions recorded ({_type_summary}). "
+        f"{len(active_contras)} active contradiction{'s' if len(active_contras) != 1 else ''}.",
+        "",
     ]
-    for i, d in enumerate(decisions, 1):
-        lines.append(f"\n## {i}. {d.title}")
-        if d.content:
-            lines.append(d.content)
-        if d.rationale:
-            lines.append(f"\n**Rationale:** {d.rationale}")
-        status = "ACTIVE" if d.valid else "SUPERSEDED"
-        lines.append(f"\n*Status: {status}*")
+
+    # ACTION REQUIRED — injected before decisions so agents see it first
+    action_lines: list[str] = []
+    resolution_lines: list[str] = []
+    try:
+        idx_path = smm_dir / "contradiction_index.json"
+        if idx_path.exists():
+            idx = _json.loads(idx_path.read_text(encoding="utf-8"))
+            cutoff_7 = _dt.now(_tz.utc) - timedelta(days=7)
+            cutoff_30 = _dt.now(_tz.utc) - timedelta(days=30)
+
+            for pair in idx.get("pairs", []):
+                if pair.get("status") != "resolved":
+                    continue
+                actioned_str = pair.get("actioned_at", "")
+                if not actioned_str:
+                    continue
+                try:
+                    actioned_dt = _dt.fromisoformat(actioned_str.replace("Z", "+00:00"))
+                except Exception:
+                    continue
+
+                winner = pair.get("decision_a_title", "")
+                loser = pair.get("decision_b_title", "")
+                note = pair.get("note", "")
+                date_str = actioned_str[:10]
+
+                already_done = False
+                # Check Kuzu for "Implemented" markers if graph client is available.
+                _kuzu_client = _get_graph_client()
+                if _kuzu_client is not None:
+                    try:
+                        impl_rows, _, _ = await _kuzu_client._driver.execute_query(
+                            "MATCH (e:Episodic) WHERE e.name STARTS WITH 'Implemented PM resolution' "
+                            "RETURN e.name LIMIT 50"
+                        )
+                        for r in impl_rows:
+                            name = r.get("e.name", "") or ""
+                            if winner and winner[:30].lower() in name.lower():
+                                already_done = True
+                                break
+                    except Exception as e:
+                        logger.warning(f"Failed to query graph for implementation status: {e}")
+
+                if actioned_dt >= cutoff_7 and not already_done:
+                    action_lines.append(
+                        f"ACTION REQUIRED — PM Resolution ({date_str}):\n"
+                        f"  KEEP: '{winner}'\n"
+                        f"  SUPERSEDED: '{loser}'\n"
+                        + (f"  PM note: {note}\n" if note else "")
+                        + f"  Before starting new work:\n"
+                        f"  1. Find code that uses '{loser}' and refactor to '{winner}'\n"
+                        f"  2. Mark as done: echo '{{\"title\":\"Implemented PM resolution: {winner[:50]}\","
+                        f"\"rationale\":\"Replaced {loser[:40]} on {date_str}\","
+                        f"\"type\":\"architectural\",\"confidence\":0.95}}' | smm add-decision --local -\n"
+                        f"  3. Commit before new feature work"
+                    )
+                elif actioned_dt >= cutoff_30:
+                    resolution_lines.append(
+                        f"  ✓ KEEP: '{winner}' — SUPERSEDED: '{loser}' ({date_str})"
+                        + (f"\n    Note: {note}" if note else "")
+                    )
+    except Exception:
+        pass  # never block context retrieval on resolution lookup failure
+
+    if action_lines:
+        lines.append(_VERIFICATION_PROTOCOL_MSG)
+        lines.append("")
+        lines.append("ACTION REQUIRED — Implement these PM resolutions:")
+        for i, al in enumerate(action_lines, 1):
+            lines.append(f"{i}. {al}")
+        lines.append("")
+
+    # Active contradictions section
+    if active_contras:
+        lines.append("ACTIVE CONTRADICTIONS:")
+        for ac in active_contras:
+            da = ac.get("decision_a", "")
+            db = ac.get("decision_b", "")
+            lines.append(f"  ⚠ '{da}' ↔ '{db}' — needs PM decision")
+        lines.append("")
+
+    # Resolved contradictions (last 30 days)
+    if resolution_lines:
+        lines.append("RESOLVED CONTRADICTIONS (last 30 days):")
+        lines.extend(resolution_lines)
+        lines.append("")
+
+    # Recent decisions
+    lines.append("RECENT DECISIONS:")
+    for i, (title, dtype, conf) in enumerate(_decision_meta[:10], 1):
+        lines.append(f"{i}. {title} [{dtype}, {conf:.2f}]")
+    if len(_decision_meta) > 10:
+        lines.append(f"... and {len(_decision_meta) - 10} more.")
+    lines.append("")
+
+    # Full decision list
+    lines.append("ALL DECISIONS:")
+    for i, (title, rationale) in enumerate(_all_rationales, 1):
+        lines.append(f"\n{i}. {title}")
+        if rationale:
+            lines.append(f"   Rationale: {rationale[:200]}")
 
     response = "\n".join(lines)
 
@@ -535,7 +891,7 @@ async def get_project_context(project: str = "smm-sync", session_id: str = "") -
     return response + _time_saved_footer()
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def check_constraints(
     proposed_action: str,
     project: str = "smm-sync",
@@ -636,7 +992,7 @@ async def check_constraints(
     }
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def get_decision_timeline(
     topic: str,
     project: str = "smm-sync",
@@ -686,7 +1042,7 @@ async def get_decision_timeline(
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def get_compliance_lineage(
     session_id: str | None = None,
     decision_title: str | None = None,
@@ -741,7 +1097,7 @@ async def get_compliance_lineage(
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def add_constraint(
     constraint: str,
     scope_keywords: list[str],
@@ -826,7 +1182,7 @@ def _write_board(smm_dir: Path, items: list[dict]) -> None:
     tmp.replace(board_path)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def get_path_context(
     file_path: str,
     project: str = "smm-sync",
@@ -861,7 +1217,7 @@ async def get_path_context(
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def get_board_items(
     status: str = "",
 ) -> str:
@@ -900,7 +1256,7 @@ async def get_board_items(
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def update_board_item(
     title: str = "",
     status: str = "backlog",
@@ -980,6 +1336,10 @@ def _configure_mcp_stdio():
 def run_server(smm_dir: Path) -> None:
     """Start the MCP server bound to the given .smm directory.
 
+    Also starts the dashboard on the configured port in a background daemon thread so
+    the MCP server and dashboard share one Kuzu connection (no file-lock
+    contention when CLI writes go through the dashboard HTTP API).
+
     Runs in foreground (blocking). Prints the transport info on start.
 
     Args:
@@ -987,5 +1347,20 @@ def run_server(smm_dir: Path) -> None:
     """
     global _smm_dir
     _smm_dir = smm_dir
+
+    # Root-Cause-1 fix: dashboard runs in same process → shares _graph_client
+    # singleton → single Kuzu writer → no "Could not set lock on file" errors.
+    import threading
+
+    def _start_dashboard() -> None:
+        try:
+            from smm_sync.dashboard import run_dashboard  # type: ignore[attr-defined]
+            run_dashboard(host="127.0.0.1", port=DASHBOARD_PORT)
+        except Exception as exc:  # noqa: BLE001
+            import sys as _sys
+            print(f"[smm-sync] dashboard failed to start: {exc}", file=_sys.stderr)
+
+    threading.Thread(target=_start_dashboard, name="smm-dashboard", daemon=True).start()
+
     _configure_mcp_stdio()  # MUST be before mcp.run()
     mcp.run()

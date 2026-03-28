@@ -29,7 +29,6 @@ known = [
   "No network calls in Weekend 1 scope",
   "coordinator.py must work on macOS and Linux (POSIX-atomic os.rename)",
   "state.json must be human-readable JSON, never binary",
-  "watcher.py and drift.py are STUBS ONLY — raise NotImplementedError",
 ]
 
 [danger_zones]
@@ -48,8 +47,6 @@ items = [
   { name = "coordinator.py", description = "Tuple Space: os.rename() atomic file claiming in .smm/locks/", owner = "" },
   { name = "state.py", description = "CRDT LWW-Register: .smm/state.json read/write/merge", owner = "" },
   { name = "git_utils.py", description = "Pre-commit hook installation + git diff parsing", owner = "" },
-  { name = "watcher.py", description = "STUB: watchdog-based smm.toml change detection (Month 1)", owner = "" },
-  { name = "drift.py", description = "STUB: semantic drift detection between CLAUDE.md versions (Month 3)", owner = "" },
 ]
 
 [conventions]

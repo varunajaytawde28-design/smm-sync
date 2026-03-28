@@ -25,8 +25,40 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+import uuid as _uuid_module
+
 from smm_sync.context_graph.models import ContextResult, Decision, RejectionResult
 from smm_sync.security import DEBUG_MODE, sanitize_content
+
+# ---------------------------------------------------------------------------
+# Shared sentence-transformers model — Bug 3 fix
+# ---------------------------------------------------------------------------
+# Module-level singleton: the 22 MB all-MiniLM-L6-v2 model is loaded exactly
+# once per Python process regardless of how many GraphClient instances exist.
+# Eliminates the 2-3 second "Loading weights" reload seen on every CLI call.
+# ---------------------------------------------------------------------------
+_shared_st_model = None
+
+
+def _get_shared_model():
+    """Return the shared SentenceTransformer, loading it once per process.
+
+    Suppresses the noisy 'Loading weights' / 'BertModel LOAD REPORT' output
+    that sentence-transformers emits at INFO level by default.
+
+    Returns:
+        Loaded SentenceTransformer('all-MiniLM-L6-v2') instance.
+    """
+    global _shared_st_model
+    if _shared_st_model is None:
+        import logging
+        # Suppress sentence-transformers and huggingface_hub progress noise
+        logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+        logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+        from sentence_transformers import SentenceTransformer
+        _shared_st_model = SentenceTransformer("all-MiniLM-L6-v2")
+    return _shared_st_model
 
 # ---------------------------------------------------------------------------
 # Source confidence hierarchy
@@ -45,6 +77,22 @@ SOURCE_CONFIDENCE: dict[str, float] = {
 }
 
 
+def _contradiction_pair_key(title_a: str, title_b: str) -> tuple[str, str]:
+    """Return a canonical, order-independent key for a contradiction pair.
+
+    Sorting ensures ("SQLite", "PostgreSQL") and ("PostgreSQL", "SQLite")
+    produce the same key, preventing reversed-pair duplicates.
+
+    Args:
+        title_a: First decision title.
+        title_b: Second decision title.
+
+    Returns:
+        Tuple of two lowercased, stripped titles in sorted order.
+    """
+    return tuple(sorted([title_a.lower().strip(), title_b.lower().strip()]))
+
+
 class _LocalEmbedder:
     """Sentence-transformers based embedder — no API key required.
 
@@ -53,9 +101,7 @@ class _LocalEmbedder:
     """
 
     def __init__(self, model_name: str = "all-MiniLM-L6-v2") -> None:
-        from sentence_transformers import SentenceTransformer
-
-        self._model = SentenceTransformer(model_name)
+        self._model = _get_shared_model()  # Bug 3: use process-level singleton
 
     async def create(
         self,
@@ -99,9 +145,7 @@ class _LocalCrossEncoder:
     """
 
     def __init__(self, model_name: str = "all-MiniLM-L6-v2") -> None:
-        from sentence_transformers import SentenceTransformer
-
-        self._model = SentenceTransformer(model_name)
+        self._model = _get_shared_model()  # Bug 3: use process-level singleton
 
     async def rank(self, query: str, passages: list[str]) -> list[tuple[str, float]]:
         """Rank passages by cosine similarity to query.
@@ -135,10 +179,9 @@ def _make_graphiti_clients(graph_path, api_key):
     from graphiti_core.llm_client.config import LLMConfig
     from graphiti_core.embedder.client import EmbedderClient
     from graphiti_core.cross_encoder.client import CrossEncoderClient
-    from sentence_transformers import SentenceTransformer
     import numpy as np
 
-    model = SentenceTransformer('all-MiniLM-L6-v2')
+    model = _get_shared_model()  # Bug 3: reuse process-level singleton
 
     class _Embedder(EmbedderClient):
         async def create(self, input_data):
@@ -302,6 +345,10 @@ class GraphClient:
         self._driver = None
         # Serialize all write operations to prevent concurrent write corruption in Kuzu
         self._write_lock = asyncio.Lock()
+        # Bug 2 fix: embedding cache for _detect_local_contradictions.
+        # Keyed by content[:200]; avoids recomputing embeddings for existing episodes
+        # when checking contradictions during batch ingestion.
+        self._embedding_cache: dict[str, list[float]] = {}
 
     async def _get_graphiti(self):
         """Return (and lazily initialise) the Graphiti instance.
@@ -537,6 +584,366 @@ class GraphClient:
         )
         return str(result.episode.uuid)
 
+    # -----------------------------------------------------------------------
+    # Bug 2 fix: episodic-level contradiction detection for local-mode writes
+    # -----------------------------------------------------------------------
+
+    async def _compute_embedding(self, text: str) -> list[float]:
+        """Compute a 384-dim embedding, using an instance-level cache.
+
+        The cache is keyed on text[:200] so that repeated calls with the same
+        content (common during batch ingestion) hit memory instead of rerunning
+        the model.
+
+        Args:
+            text: Text to embed (truncated to 500 chars for speed).
+
+        Returns:
+            List of 384 floats.
+        """
+        key = text[:200]
+        if key in self._embedding_cache:
+            return self._embedding_cache[key]
+        model = _get_shared_model()
+        emb = model.encode(text[:500], convert_to_numpy=True).tolist()
+        self._embedding_cache[key] = emb
+        return emb
+
+    async def _detect_local_contradictions(
+        self,
+        title: str,
+        episode_body: str,
+        episode_uuid: str,
+        project: str,
+    ) -> list[dict]:
+        """Detect contradictions among :Episodic nodes without edges.
+
+        Called by add_decision_local() after the new node is written.
+        Replaces the edge-based contradiction_check() for the local-write path
+        where no edges exist (Graphiti entity extraction was skipped).
+
+        Algorithm (zero API calls):
+        1. Embed new decision content (sentence-transformers, local).
+        2. Fetch all existing :Episodic nodes (excluding the just-written one).
+        3. Compute cosine similarity for each pair.
+        4. For pairs with similarity > 0.5, apply text-based heuristics:
+           - Check for explicit contradiction keywords in combined text.
+           - Check for same-topic different-choice pattern.
+        5. Return contradiction dicts; caller writes them to contradictions.jsonl.
+
+        Args:
+            title: Title of the newly-written decision.
+            episode_body: Full episode body (content + rationale + metadata).
+            episode_uuid: UUID of the just-written episode (excluded from search).
+            project: Project name (for future per-project scoping).
+
+        Returns:
+            List of contradiction dicts (may be empty). Each has keys:
+            id, decision_a, decision_b, explanation, detected_at, resolved.
+            Returns [] on any error so callers never block.
+        """
+        _CONTRADICTION_WORDS = frozenset({
+            # explicit rejection / replacement
+            "instead of", "rejected", "replaced by", "switched from",
+            "moved away from", "supersedes", "contradicts", "overrides",
+            "conflict", "no longer", "reverted", "undoes", "opposite of",
+            "not chosen", "abandoned",
+            # migration / transition signals
+            "split", "migrate", "migration", "switch to", "switching to",
+            "replace", "replacement", "separate",
+            "rewrite", "refactor away", "moving to", "transition to",
+            "rather than", "over graphql", "over rest", "async instead",
+            "drop", "remove", "eliminate", "decouple", "automate",
+        })
+        # Additive decisions (Add X, Introduce Y, Enhance Z) extend rather than
+        # replace — skip the high-similarity tier-1 check to avoid false positives
+        # when multiple decisions share the same technical domain.
+        _ADDITIVE_PREFIXES = ("add ", "introduce ", "enhance ", "extend ", "include ")
+
+        try:
+            import numpy as np
+
+            new_emb = await self._compute_embedding(f"{title} {episode_body[:400]}")
+            new_arr = np.array(new_emb, dtype=np.float32)
+            new_norm = float(np.linalg.norm(new_arr))
+            if new_norm == 0:
+                return []
+
+            # Fetch all existing Episodic nodes except the one just written.
+            # LIMIT 200 keeps this bounded for large graphs.
+            rows, _, _ = await self._driver.execute_query(
+                "MATCH (e:Episodic) "
+                f"WHERE e.uuid <> '{episode_uuid}' "
+                "RETURN e.uuid, e.name, e.content "
+                "ORDER BY e.created_at DESC LIMIT 200"
+            )
+            contradictions = []
+            for row in rows:
+                existing_title = row.get("e.name", "") or ""
+                existing_content = row.get("e.content", "") or ""
+
+                # Skip self-contradictions: same title, different UUID
+                if existing_title.lower().strip() == title.lower().strip():
+                    continue
+
+                existing_emb = await self._compute_embedding(
+                    f"{existing_title} {existing_content[:400]}"
+                )
+                existing_arr = np.array(existing_emb, dtype=np.float32)
+                existing_norm = float(np.linalg.norm(existing_arr))
+                if existing_norm == 0:
+                    continue
+
+                score = float(np.dot(new_arr, existing_arr) / (new_norm * existing_norm))
+
+                # Tier 1: high similarity signals a direct conflict
+                # Skip for additive decisions ("Add X", "Introduce Y") — they
+                # extend rather than replace, so high similarity is expected.
+                is_additive = any(title.lower().startswith(p) for p in _ADDITIVE_PREFIXES)
+                high_sim = not is_additive and score > 0.72
+
+                # Tier 2: moderate similarity + explicit contradiction keyword.
+                # Include both titles so keywords in titles (e.g. "instead of",
+                # "split", "automate") are checked even when absent from the body.
+                combined = (
+                    title + " " + episode_body + " "
+                    + existing_title + " " + existing_content
+                ).lower()
+                keyword_hit = score > 0.5 and any(w in combined for w in _CONTRADICTION_WORDS)
+
+                if high_sim or keyword_hit:
+                    reason = (
+                        f"high semantic similarity ({score:.2f})"
+                        if high_sim and not keyword_hit
+                        else f"similarity {score:.2f}, contradiction keyword detected"
+                    )
+                    contradictions.append({
+                        "id": str(_uuid_module.uuid4()),
+                        "decision_a": title,
+                        "decision_b": existing_title,
+                        "explanation": (
+                            f"'{title}' may contradict '{existing_title}' ({reason})"
+                        ),
+                        "detected_at": datetime.now(timezone.utc).isoformat(),
+                        "resolved": False,
+                    })
+
+            return contradictions
+        except Exception:
+            if DEBUG_MODE:
+                raise
+            return []  # never block add_decision_local on contradiction detection
+
+    async def _detect_via_agent_cli(
+        self,
+        title: str,
+        episode_body: str,
+        episode_uuid: str,
+        project: str,
+        agent: str,
+    ) -> list[dict]:
+        """Detect contradictions by calling the user's AI agent CLI.
+
+        Sends all existing decisions + the new one to the configured agent
+        (claude -p or cursor --message) and parses the JSON response.
+
+        Pre-filters to top 30 by embedding similarity when the graph has
+        more than 30 decisions, to keep the prompt within context limits.
+
+        Falls back to [] on any failure (timeout, command not found, parse
+        error) — never blocks the decision write.
+
+        Args:
+            title: Title of the newly-written decision.
+            episode_body: Full episode body (content + rationale + metadata).
+            episode_uuid: UUID of the just-written episode (excluded).
+            project: Project name (unused, for future scoping).
+            agent: 'claude-code', 'cursor', or 'both'.
+
+        Returns:
+            List of contradiction dicts, or [] on any failure.
+        """
+        import asyncio
+        import json as _json
+        import re
+        import subprocess
+
+        try:
+            import numpy as np
+        except ImportError:
+            np = None  # type: ignore[assignment]
+
+        # Fetch existing decisions (exclude the just-written node).
+        try:
+            rows, _, _ = await self._driver.execute_query(
+                "MATCH (e:Episodic) "
+                f"WHERE e.uuid <> '{episode_uuid}' "
+                "RETURN e.uuid, e.name, e.content "
+                "ORDER BY e.created_at DESC LIMIT 200"
+            )
+        except Exception as _e:
+            print(f"  [smm] agent-cli: kuzu query failed: {_e}", file=sys.stderr)
+            return []
+
+        if not rows:
+            return []
+
+        decisions: list[tuple[str, str]] = [
+            (row.get("e.name", "") or "", row.get("e.content", "") or "")
+            for row in rows
+        ]
+
+        # Pre-filter to top 30 by local embedding similarity when graph is large.
+        if len(decisions) > 30 and np is not None:
+            try:
+                new_emb = await self._compute_embedding(f"{title} {episode_body[:400]}")
+                new_arr = np.array(new_emb, dtype=np.float32)
+                new_norm = float(np.linalg.norm(new_arr))
+
+                scored: list[tuple[float, str, str]] = []
+                for name, content in decisions:
+                    emb = await self._compute_embedding(f"{name} {content[:400]}")
+                    arr = np.array(emb, dtype=np.float32)
+                    norm = float(np.linalg.norm(arr))
+                    score = (
+                        float(np.dot(new_arr, arr) / (new_norm * norm))
+                        if new_norm > 0 and norm > 0
+                        else 0.0
+                    )
+                    scored.append((score, name, content))
+
+                scored.sort(key=lambda x: x[0], reverse=True)
+                decisions = [(name, content) for _, name, content in scored[:30]]
+            except Exception:
+                # Embedding pre-filter failed — fall back to first 30 by recency
+                decisions = decisions[:30]
+
+        # Build numbered decision list for the prompt.
+        lines: list[str] = []
+        for i, (name, content) in enumerate(decisions, 1):
+            snippet = ""
+            if "Rationale: " in content:
+                snippet = content.split("Rationale: ", 1)[1].split("\n")[0][:120]
+            else:
+                snippet = content[:120]
+            lines.append(f"{i}. {name}: {snippet}")
+
+        new_rationale = (
+            episode_body.split("Rationale: ", 1)[1].split("\n")[0][:200]
+            if "Rationale: " in episode_body
+            else episode_body[:200]
+        )
+
+        prompt = (
+            "Here are all existing architectural decisions:\n"
+            + "\n".join(lines)
+            + "\n\nNEW DECISION just added:\n"
+            + f"{title}: {new_rationale}\n\n"
+            + "Does the new decision contradict, reverse, replace, or conflict "
+            + "with any existing decisions?\n\n"
+            + 'Output ONLY JSON: [{"existing_number": N, "reason": "..."}] or []\n'
+            + "Nothing else."
+        )
+
+        import tempfile
+
+        def _run_sync(cmd: list[str], env: dict | None = None) -> str:
+            """Run agent CLI synchronously; raises on failure."""
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env=env,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"exit {result.returncode}: {result.stderr[:200]}"
+                )
+            return result.stdout
+
+        # Build a clean environment for claude -p so that a nested invocation
+        # from inside a Claude Code session is not blocked by the parent's
+        # session-detection env vars.
+        _safe_env = os.environ.copy()
+        for _var in [
+            "CLAUDECODE",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY",
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+        ]:
+            _safe_env.pop(_var, None)
+        _safe_env["CLAUDE_CODE_TMPDIR"] = tempfile.mkdtemp(prefix="smm-axiom-")
+
+        loop = asyncio.get_running_loop()
+        raw_output: str | None = None
+
+        if agent in ("claude-code", "both"):
+            try:
+                # claude -p "<prompt>" — print mode, non-interactive, exits after response
+                raw_output = await loop.run_in_executor(
+                    None, lambda: _run_sync(["claude", "-p", prompt], env=_safe_env)
+                )
+            except FileNotFoundError:
+                print("  [smm] contradiction check: 'claude' not found in PATH", file=sys.stderr)
+            except subprocess.TimeoutExpired:
+                print("  [smm] contradiction check: claude -p timed out (30s)", file=sys.stderr)
+            except RuntimeError as _e:
+                print(f"  [smm] contradiction check: claude -p failed: {_e}", file=sys.stderr)
+
+        if raw_output is None and agent in ("cursor", "both"):
+            try:
+                # cursor --message "<prompt>" — Cursor CLI one-shot AI query.
+                # Flag name may vary by Cursor version; update here if needed.
+                raw_output = await loop.run_in_executor(
+                    None, lambda: _run_sync(["cursor", "--message", prompt])
+                )
+            except FileNotFoundError:
+                print("  [smm] contradiction check: 'cursor' not found in PATH", file=sys.stderr)
+            except subprocess.TimeoutExpired:
+                print("  [smm] contradiction check: cursor --message timed out (30s)", file=sys.stderr)
+            except RuntimeError as _e:
+                print(f"  [smm] contradiction check: cursor --message failed: {_e}", file=sys.stderr)
+
+        if raw_output is None:
+            return []
+
+        # Parse JSON array from the agent's response.
+        try:
+            match = re.search(r"\[.*?\]", raw_output, re.DOTALL)
+            if not match:
+                return []
+            parsed = _json.loads(match.group(0))
+            if not isinstance(parsed, list):
+                return []
+
+            contradictions: list[dict] = []
+            for item in parsed:
+                if not isinstance(item, dict):
+                    continue
+                n = item.get("existing_number")
+                reason = str(item.get("reason", ""))
+                if not isinstance(n, int) or n < 1 or n > len(decisions):
+                    continue
+                existing_name, _ = decisions[n - 1]
+                # Skip self-contradictions: same title, case-insensitive
+                if existing_name.lower().strip() == title.lower().strip():
+                    continue
+                contradictions.append({
+                    "id": str(_uuid_module.uuid4()),
+                    "decision_a": title,
+                    "decision_b": existing_name,
+                    "explanation": (
+                        f"'{title}' may contradict '{existing_name}': {reason}"
+                    ),
+                    "detected_at": datetime.now(timezone.utc).isoformat(),
+                    "resolved": False,
+                })
+            return contradictions
+        except Exception as _e:
+            print(f"  [smm] contradiction check: response parse error: {_e}", file=sys.stderr)
+            return []
+
     async def add_decision_local(
         self,
         title: str,
@@ -544,10 +951,11 @@ class GraphClient:
         rationale: str,
         made_by: str,
         project: str,
-        constraints: list[str] | None = None,
-        alternatives: list[str] | None = None,
+        constraints: list[str] | str | None = None,
+        alternatives: list[str] | str | None = None,
         decision_type: str = "technical",
         source_type: str = "manual",
+        confidence: float | None = None,
     ) -> str:
         """Write a decision directly to Kuzu — zero Anthropic API calls.
 
@@ -584,15 +992,23 @@ class GraphClient:
             )
         rationale, _ = sanitize_content(rationale)
 
-        constraints = constraints or []
-        alternatives = alternatives or []
+        # Normalise: accept plain string or list — join() needs a list
+        if isinstance(constraints, str):
+            constraints = [constraints] if constraints else []
+        else:
+            constraints = list(constraints) if constraints else []
+        if isinstance(alternatives, str):
+            alternatives = [alternatives] if alternatives else []
+        else:
+            alternatives = list(alternatives) if alternatives else []
 
-        confidence = await self._calculate_confidence(
-            source_type=source_type,
-            content=content,
-            has_alternatives=bool(alternatives),
-            has_rationale=bool(rationale),
-        )
+        if confidence is None:
+            confidence = await self._calculate_confidence(
+                source_type=source_type,
+                content=content,
+                has_alternatives=bool(alternatives),
+                has_rationale=bool(rationale),
+            )
 
         episode_body = (
             f"[PROJECT: {project}]\n\n"
@@ -601,6 +1017,7 @@ class GraphClient:
             f"Decision type: {decision_type}\n"
             f"Made by: {made_by}\n"
             f"Confidence: {confidence:.2f}\n"
+            f"Status: pending\n"
             f"Constraints: {'; '.join(constraints) if constraints else 'none'}\n"
             f"Alternatives considered: {'; '.join(alternatives) if alternatives else 'none'}"
         )
@@ -644,8 +1061,6 @@ class GraphClient:
             f"source_description: 'decision by {_esc(made_by)}', "
             f"content: '{_esc(episode_body[:8000])}', "
             f"created_at: timestamp('{ts}'), "
-            f"valid_at: timestamp('{ts}'), "
-            f"invalid_at: null, "
             f"group_id: '{_esc(project)}'"
             "})"
         )
@@ -653,7 +1068,454 @@ class GraphClient:
         async with self._write_lock:
             await self._driver.execute_query(cypher)
 
+        # Episodic-level contradiction detection.
+        # Route based on .smm/config.json {"agent": "..."}.
+        # - "claude-code" / "cursor" / "both" → call the user's AI agent CLI
+        # - "skip" (or config absent)          → local embedding heuristic
+        import json as _json
+        smm_dir = self.graph_dir.parent
+        _agent_cfg = "skip"
+        try:
+            _cfg_path = smm_dir / "config.json"
+            # Fix 6: if config.json not found at graph_dir.parent, walk up from cwd
+            if not _cfg_path.exists():
+                try:
+                    from smm_sync.config import get_smm_dir as _get_smm_dir_cfg
+                    _alt = _get_smm_dir_cfg() / "config.json"
+                    if _alt.exists():
+                        _cfg_path = _alt
+                except Exception:
+                    pass
+            if _cfg_path.exists():
+                _agent_cfg = _json.loads(_cfg_path.read_text(encoding="utf-8")).get(
+                    "agent", "skip"
+                )
+        except Exception:
+            pass  # malformed config → fall back to local
+
+        if _agent_cfg == "skip":
+            local_contradictions = await self._detect_local_contradictions(
+                title=title,
+                episode_body=episode_body,
+                episode_uuid=episode_uuid,
+                project=project,
+            )
+        else:
+            local_contradictions = await self._detect_via_agent_cli(
+                title=title,
+                episode_body=episode_body,
+                episode_uuid=episode_uuid,
+                project=project,
+                agent=_agent_cfg,
+            )
+
+        if local_contradictions:
+            # Filter out pairs already actioned in the index so the same
+            # contradiction is never written to contradictions.jsonl twice.
+            try:
+                from smm_sync.contradiction_index import filter_new_contradictions
+                local_contradictions = filter_new_contradictions(
+                    smm_dir,
+                    local_contradictions,
+                    new_title=title,
+                )
+            except Exception:
+                pass  # never block on index read failure
+            contradictions_path = smm_dir / "contradictions.jsonl"
+            # Dedup: skip reversed pairs already in contradictions.jsonl.
+            # Normalized pair key ("A","B") == ("B","A") so "SQLite↔Postgres"
+            # is never written twice even when synced in opposite order.
+            _seen_pair_keys: set[tuple] = set()
+            try:
+                if contradictions_path.exists():
+                    for _ln in contradictions_path.read_text(encoding="utf-8").splitlines():
+                        _ln = _ln.strip()
+                        if _ln:
+                            try:
+                                _e = _json.loads(_ln)
+                                _da = _e.get("decision_a", "") or ""
+                                _db = _e.get("decision_b", "") or ""
+                                if _da and _db:
+                                    _seen_pair_keys.add(_contradiction_pair_key(_da, _db))
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+            _deduped: list[dict] = []
+            for c in local_contradictions:
+                _pk = _contradiction_pair_key(
+                    c.get("decision_a", ""), c.get("decision_b", "")
+                )
+                if _pk not in _seen_pair_keys:
+                    _deduped.append(c)
+                    _seen_pair_keys.add(_pk)
+            local_contradictions = _deduped
+            for c in local_contradictions:
+                # Fix 5: print clean contradiction warning to stderr before "recorded"
+                _existing = c.get("decision_b", "")
+                _explanation = c.get("explanation", "Conflicting decisions detected")
+                print(
+                    f"\u26a0 Contradiction: conflicts with \"{_existing}\"\n"
+                    f"  Reason: {_explanation}",
+                    file=sys.stderr,
+                )
+                try:
+                    from smm_sync.jsonl_writer import append_jsonl_locked
+                    append_jsonl_locked(contradictions_path, c)
+                except Exception:
+                    pass  # never block ingestion on JSONL write failure
+
+        # Incrementally build edges for the new node using local embeddings.
+        # Zero API calls — embedding-based only. Runs after the node is written
+        # so the new node is included in the pairwise similarity scan.
+        try:
+            await self._create_edges_for_node(
+                episode_uuid=episode_uuid,
+                episode_body=episode_body,
+                title=title,
+                project=project,
+            )
+        except Exception:
+            if DEBUG_MODE:
+                raise
+            pass  # never block ingestion on edge creation failure
+
+        # Write audit entry to compliance_lineage.jsonl so the Audit Trail and
+        # the +N this week counter have data to display.
+        try:
+            import json as _json_audit
+            # Fix 2: use agent name from config.json (already resolved above as _agent_cfg)
+            _audit_agent = _agent_cfg if _agent_cfg not in ("skip", None) else "manual"
+            audit_entry = {
+                "event_type": "decision_added",
+                "timestamp": now.isoformat(),
+                "decision_title": title,
+                "confidence": round(confidence, 4),
+                "actor": made_by,
+                "agent": _audit_agent,
+                "source_type": source_type,
+                "decision_id": episode_uuid,
+                "session_id": _audit_agent,
+                "decisions_surfaced": [title],
+                "decision_count": 1,
+            }
+            audit_path = self.graph_dir.parent / "compliance_lineage.jsonl"
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(audit_path, "a", encoding="utf-8") as _af:
+                _af.write(_json_audit.dumps(audit_entry) + "\n")
+        except Exception:
+            pass  # never block ingestion on audit write failure
+
         return episode_uuid
+
+    # ---------------------------------------------------------------------------
+    # Edge discovery — Approach 1: fully local, zero API credits
+    # ---------------------------------------------------------------------------
+
+    async def _ensure_decision_edge_table(self) -> None:
+        """Create DecisionEdge REL TABLE in Kuzu if it does not exist yet.
+
+        Uses IF NOT EXISTS so it is safe to call on every startup.
+        Edges are stored between :Episodic nodes and carry the relationship
+        type determined by local heuristics.
+        """
+        cypher = (
+            "CREATE REL TABLE IF NOT EXISTS DecisionEdge("
+            "FROM Episodic TO Episodic, "
+            "name STRING, "
+            "edge_type STRING, "
+            "reason STRING, "
+            "weight FLOAT, "
+            "created_at TIMESTAMP"
+            ")"
+        )
+        await self._driver.execute_query(cypher)
+
+    @staticmethod
+    def _infer_edge_type(title_a: str, body_a: str, title_b: str, body_b: str) -> str:
+        """Classify the relationship between two decisions using keyword heuristics.
+
+        Pure text analysis — zero API calls.
+
+        Args:
+            title_a: Title of the source decision.
+            body_a: Full episode body of the source decision.
+            title_b: Title of the target decision.
+            body_b: Full episode body of the target decision.
+
+        Returns:
+            One of: SUPERSEDES, REQUIRES, ENABLES, PREFERRED_OVER, RELATES_TO.
+        """
+        a_lower = (title_a + " " + body_a).lower()
+        b_lower = (title_b + " " + body_b).lower()
+        combined = a_lower + " " + b_lower
+
+        # SUPERSEDES: one replaces / overrides the other
+        supersedes_words = {
+            "switch", "move away", "replaced by", "supersedes",
+            "instead of", "no longer", "reverted", "abandoned",
+            "migrate from", "drop ", "dropped",
+        }
+        if any(w in a_lower for w in supersedes_words):
+            return "SUPERSEDES"
+
+        # PREFERRED_OVER: explicit rejection of an alternative
+        reject_words = {"rejected", "not chosen", "preferred over", "chose over"}
+        if any(w in combined for w in reject_words):
+            return "PREFERRED_OVER"
+
+        # REQUIRES: one decision's constraint is the other's subject
+        if "requires" in a_lower or ("constraint" in a_lower and title_b.lower() in a_lower):
+            return "REQUIRES"
+
+        # ENABLES: one unlocks / allows the other
+        if "enables" in a_lower or "allow" in a_lower:
+            return "ENABLES"
+
+        return "RELATES_TO"
+
+    async def _create_edges_for_node(
+        self,
+        episode_uuid: str,
+        episode_body: str,
+        title: str,
+        project: str,
+    ) -> int:
+        """Create edges between a new node and existing similar nodes.
+
+        Called by add_decision_local() immediately after writing the node.
+        Embedding similarity > 0.6 triggers edge creation. Deduplicates by
+        checking whether an edge already exists before creating.
+
+        Args:
+            episode_uuid: UUID of the newly-written :Episodic node.
+            episode_body: Full episode body text.
+            title: Decision title.
+            project: Project name (for future per-project scoping).
+
+        Returns:
+            Number of new edges created.
+        """
+        import numpy as np
+
+        await self._ensure_decision_edge_table()
+
+        new_emb = await self._compute_embedding(f"{title} {episode_body[:400]}")
+        new_arr = np.array(new_emb, dtype=np.float32)
+        new_norm = float(np.linalg.norm(new_arr))
+        if new_norm == 0:
+            return 0
+
+        rows, _, _ = await self._driver.execute_query(
+            "MATCH (e:Episodic) "
+            f"WHERE e.uuid <> '{episode_uuid}' "
+            "RETURN e.uuid, e.name, e.content "
+            "ORDER BY e.created_at DESC LIMIT 200"
+        )
+
+        created = 0
+        now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        def _esc(s: str) -> str:
+            return (
+                s.replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\n", "\\n")
+                .replace("\r", "")
+            )
+
+        for row in rows:
+            other_uuid = row.get("e.uuid", "") or ""
+            other_title = row.get("e.name", "") or ""
+            other_content = row.get("e.content", "") or ""
+            if not other_uuid:
+                continue
+
+            other_emb = await self._compute_embedding(
+                f"{other_title} {other_content[:400]}"
+            )
+            other_arr = np.array(other_emb, dtype=np.float32)
+            other_norm = float(np.linalg.norm(other_arr))
+            if other_norm == 0:
+                continue
+
+            score = float(np.dot(new_arr, other_arr) / (new_norm * other_norm))
+            if score < 0.5:
+                continue
+
+            edge_type = self._infer_edge_type(title, episode_body, other_title, other_content)
+            reason = f"similarity={score:.2f}"
+
+            # Deduplicate: skip if an edge already exists in either direction
+            check_rows, _, _ = await self._driver.execute_query(
+                "MATCH (a:Episodic)-[r:DecisionEdge]->(b:Episodic) "
+                f"WHERE (a.uuid = '{_esc(episode_uuid)}' AND b.uuid = '{_esc(other_uuid)}') "
+                f"   OR (a.uuid = '{_esc(other_uuid)}' AND b.uuid = '{_esc(episode_uuid)}') "
+                "RETURN count(r) AS cnt"
+            )
+            if check_rows and (check_rows[0].get("cnt") or 0) > 0:
+                continue
+
+            edge_cypher = (
+                f"MATCH (a:Episodic {{uuid: '{_esc(episode_uuid)}'}}), "
+                f"      (b:Episodic {{uuid: '{_esc(other_uuid)}'}}) "
+                "CREATE (a)-[:DecisionEdge {"
+                f"name: '{_esc(edge_type)}', "
+                f"edge_type: '{_esc(edge_type)}', "
+                f"reason: '{_esc(reason)}', "
+                f"weight: {score:.4f}, "
+                f"created_at: timestamp('{now_ts}')"
+                "}]->(b)"
+            )
+            async with self._write_lock:
+                await self._driver.execute_query(edge_cypher)
+            created += 1
+
+        return created
+
+    async def discover_edges(self, project: str) -> dict:
+        """Discover and create edges between ALL decisions using local embeddings.
+
+        Full pairwise scan — use on existing graphs or after bulk ingestion.
+        For incremental use, add_decision_local() calls _create_edges_for_node()
+        automatically after each write.
+
+        Algorithm (zero API credits, zero network calls):
+        1. Load all :Episodic nodes.
+        2. Embed each node's content with the shared all-MiniLM-L6-v2 model.
+        3. Pairwise cosine similarity — O(n²) but fast for n ≤ 500.
+        4. Pairs with similarity > 0.6 get an edge with an inferred type.
+        5. Deduplicates before writing (no duplicate edges).
+
+        Args:
+            project: Project name (informational; logged in output).
+
+        Returns:
+            Dict with keys: nodes_scanned, edges_created, edges_skipped.
+        """
+        import numpy as np
+
+        await self._get_graphiti()  # ensure driver + schema initialised
+        await self._ensure_decision_edge_table()
+
+        rows, _, _ = await self._driver.execute_query(
+            "MATCH (e:Episodic) "
+            "RETURN e.uuid, e.name, e.content "
+            "ORDER BY e.created_at ASC"
+        )
+
+        if not rows:
+            return {"nodes_scanned": 0, "edges_created": 0, "edges_skipped": 0}
+
+        # Pre-compute all embeddings in one pass
+        uuids = [r.get("e.uuid", "") for r in rows]
+        titles = [r.get("e.name", "") or "" for r in rows]
+        contents = [r.get("e.content", "") or "" for r in rows]
+
+        texts = [f"{t} {c[:400]}" for t, c in zip(titles, contents)]
+        model = _get_shared_model()
+        embeddings = model.encode(texts, batch_size=32, show_progress_bar=False)
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        # Avoid division by zero
+        norms = np.where(norms == 0, 1.0, norms)
+        normed = embeddings / norms
+
+        n = len(uuids)
+        # Full similarity matrix
+        sim_matrix = normed @ normed.T  # shape (n, n)
+
+        now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        created = 0
+        skipped = 0
+
+        def _esc(s: str) -> str:
+            return (
+                s.replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\n", "\\n")
+                .replace("\r", "")
+            )
+
+        for i in range(n):
+            for j in range(i + 1, n):  # upper triangle only — avoid duplicates
+                score = float(sim_matrix[i, j])
+                if score < 0.5:
+                    skipped += 1
+                    continue
+
+                uuid_a = uuids[i]
+                uuid_b = uuids[j]
+                if not uuid_a or not uuid_b:
+                    skipped += 1
+                    continue
+
+                # Check for existing edge
+                check_rows, _, _ = await self._driver.execute_query(
+                    "MATCH (a:Episodic)-[r:DecisionEdge]->(b:Episodic) "
+                    f"WHERE (a.uuid = '{_esc(uuid_a)}' AND b.uuid = '{_esc(uuid_b)}') "
+                    f"   OR (a.uuid = '{_esc(uuid_b)}' AND b.uuid = '{_esc(uuid_a)}') "
+                    "RETURN count(r) AS cnt"
+                )
+                if check_rows and (check_rows[0].get("cnt") or 0) > 0:
+                    skipped += 1
+                    continue
+
+                edge_type = self._infer_edge_type(
+                    titles[i], contents[i], titles[j], contents[j]
+                )
+                reason = f"similarity={score:.2f}"
+
+                edge_cypher = (
+                    f"MATCH (a:Episodic {{uuid: '{_esc(uuid_a)}'}}), "
+                    f"      (b:Episodic {{uuid: '{_esc(uuid_b)}'}}) "
+                    "CREATE (a)-[:DecisionEdge {"
+                    f"name: '{_esc(edge_type)}', "
+                    f"edge_type: '{_esc(edge_type)}', "
+                    f"reason: '{_esc(reason)}', "
+                    f"weight: {score:.4f}, "
+                    f"created_at: timestamp('{now_ts}')"
+                    "}]->(b)"
+                )
+                async with self._write_lock:
+                    await self._driver.execute_query(edge_cypher)
+                created += 1
+
+        return {"nodes_scanned": n, "edges_created": created, "edges_skipped": skipped}
+
+    async def get_edges(self, project: str) -> list[dict]:
+        """Return all DecisionEdge edges as source/target/type dicts.
+
+        Used by the /api/graph dashboard endpoint to include real edges in the
+        Cytoscape.js response alongside nodes.
+
+        Args:
+            project: Project name (currently unused; edges span all projects).
+
+        Returns:
+            List of dicts with keys: source_uuid, target_uuid, edge_type, weight.
+        """
+        try:
+            await self._get_graphiti()
+            # Check if DecisionEdge table exists before querying
+            await self._ensure_decision_edge_table()
+            rows, _, _ = await self._driver.execute_query(
+                "MATCH (a:Episodic)-[r:DecisionEdge]->(b:Episodic) "
+                "RETURN a.uuid AS src, b.uuid AS tgt, r.edge_type AS etype, r.weight AS w"
+            )
+            return [
+                {
+                    "source_uuid": row.get("src", ""),
+                    "target_uuid": row.get("tgt", ""),
+                    "edge_type": row.get("etype", "RELATES_TO"),
+                    "weight": float(row.get("w") or 0.6),
+                }
+                for row in rows
+                if row.get("src") and row.get("tgt")
+            ]
+        except Exception:
+            if DEBUG_MODE:
+                raise
+            return []
 
     async def search_context(
         self,
@@ -729,6 +1591,9 @@ class GraphClient:
         for i, row in enumerate(rows):
             title = row.get("e.name") or ""
             content = row.get("e.content") or ""
+            # Unescape Cypher-escaped newlines (\\n → real newline) so that
+            # splitlines() and split("\n") work correctly on the parsed content.
+            content = content.replace("\\n", "\n")
             source = row.get("e.source_description") or ""
             created_at = row.get("e.created_at") or datetime.utcnow()
 

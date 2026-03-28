@@ -89,10 +89,10 @@ if git diff --staged --quiet 2>/dev/null; then
 fi
 
 # ── Temp files (cleaned up on exit) ──────────────────────────────────────
-DIFF_FILE=$(mktemp /tmp/axiom_diff_XXXXXX.txt)
-PROMPT_FILE=$(mktemp /tmp/axiom_prompt_XXXXXX.txt)
-RESPONSE_FILE=$(mktemp /tmp/axiom_response_XXXXXX.json)
-PAYLOAD_FILE=$(mktemp /tmp/axiom_payload_XXXXXX.json)
+DIFF_FILE=$(mktemp smm_diff_XXXXXX.txt)
+PROMPT_FILE=$(mktemp smm_prompt_XXXXXX.txt)
+RESPONSE_FILE=$(mktemp smm_response_XXXXXX.json)
+PAYLOAD_FILE=$(mktemp smm_payload_XXXXXX.json)
 trap "rm -f $DIFF_FILE $PROMPT_FILE $RESPONSE_FILE $PAYLOAD_FILE" EXIT
 
 # ── Get staged diff (truncated) ───────────────────────────────────────────
@@ -168,51 +168,45 @@ DTYPE=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get
 CONFIDENCE=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('confidence',0.80))" "$PAYLOAD_FILE" 2>/dev/null)
 
 # ── Contradiction check ───────────────────────────────────────────────────
+# Only NEW pairs are shown (already-resolved/deferred/ignored pairs are
+# filtered by smm check-contradictions against .smm/contradiction_index.json).
+# smm handle-contradictions shows an [R]esolve/[D]efer/[I]gnore menu for
+# each new pair, records every action in the index, and outputs the overall
+# status (approved/deferred) to stdout.
 STATUS="approved"
 if command -v smm >/dev/null 2>&1; then
-    CONTRA_FILE=$(mktemp /tmp/axiom_contra_XXXXXX.json)
+    CONTRA_FILE=$(mktemp smm_contra_XXXXXX.json)
     trap "rm -f $DIFF_FILE $PROMPT_FILE $RESPONSE_FILE $PAYLOAD_FILE $CONTRA_FILE" EXIT
 
     smm check-contradictions --title "$TITLE" --content "$RATIONALE" --json-output \
         > "$CONTRA_FILE" 2>/dev/null || echo '{"contradictions":[]}' > "$CONTRA_FILE"
 
-    HAS_CONTRA=$(python3 -c "
+    CONTRA_COUNT=$(python3 -c "
 import json,sys
 d=json.load(open(sys.argv[1]))
-print(len(d.get('contradictions',[])) > 0)
-" "$CONTRA_FILE" 2>/dev/null) || HAS_CONTRA="False"
+print(len(d.get('contradictions',[])))
+" "$CONTRA_FILE" 2>/dev/null) || CONTRA_COUNT="0"
 
-    if [ "$HAS_CONTRA" = "True" ]; then
-        CONFLICT=$(python3 -c "
-import json,sys
-d=json.load(open(sys.argv[1]))
-c=d.get('contradictions',[{}])[0]
-print(c.get('existing','unknown'))
-" "$CONTRA_FILE" 2>/dev/null)
+    if [ "${CONTRA_COUNT:-0}" -gt 0 ] 2>/dev/null; then
+        # Detect CI / non-interactive environment
+        NON_INTERACTIVE_FLAG=""
+        if [ "${CI:-}" = "true" ] || [ "${CI:-}" = "1" ] \
+           || [ "${AXIOM_NON_INTERACTIVE:-}" = "1" ] \
+           || ! [ -c /dev/tty ] 2>/dev/null; then
+            NON_INTERACTIVE_FLAG="--non-interactive"
+            log "non-interactive mode — all contradictions deferred"
+        fi
 
-        # Interactive prompt on /dev/tty (stdin may be piped)
-        {
-            printf '\n'
-            printf '⚠️  Axiom Lore-Hook: Contradiction detected\n'
-            printf '   New decision:   %s\n' "$TITLE"
-            printf '   Conflicts with: %s\n' "$CONFLICT"
-            printf '\n'
-            printf '   [1] Resolve now  (mark old decision superseded)\n'
-            printf '   [2] Defer to PM  (tag as pending_review)\n'
-            printf '   [3] Ignore       (skip graph entry, commit as-is)\n'
-            printf '\n'
-            printf '   Choice [1/2/3, default=2]: '
-        } > /dev/tty
+        # handle-contradictions prints interactive prompts to stderr
+        # (redirected to /dev/tty by 2>/dev/tty) and prints the overall
+        # status to stdout for capture in STATUS.
+        STATUS=$(smm handle-contradictions \
+            --title "$TITLE" \
+            --contra-file "$CONTRA_FILE" \
+            $NON_INTERACTIVE_FLAG \
+            2>/dev/tty) || STATUS="deferred"
 
-        read -r CHOICE < /dev/tty || CHOICE="2"
-        case "${CHOICE:-2}" in
-            1) STATUS="approved" ;;
-            3)
-                log "user chose ignore — skipping ingestion"
-                exit 0
-                ;;
-            *) STATUS="deferred" ;;
-        esac
+        log "contradictions handled — overall status: $STATUS"
     fi
 fi
 
@@ -252,27 +246,55 @@ else
     log "trailers staged at $TRAILERS_PENDING"
 fi
 
-# ── Ingest into graph (background — non-blocking) ─────────────────────────
+# ── Write decision to JSONL (fast path — Rust binary or Python fallback) ───
+# smm add-decision writes to .smm/decisions.jsonl only (~10ms Rust / <500ms Python).
+# smm check runs in the background afterwards; the commit never blocks on it.
 if command -v smm >/dev/null 2>&1; then
-    python3 - "$PAYLOAD_FILE" "$STATUS" << 'PYEOF' | smm add-decision --local - >> "$LOG_FILE" 2>&1 &
-import json, sys
+    # Capture git context for EU AI Act Art 12 reference source traceability
+    GIT_HASH=$(git rev-parse --short HEAD 2>/dev/null) || GIT_HASH=""
+    GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || GIT_BRANCH=""
+    if [ -n "$COMMIT_MSG_FILE" ]; then
+        COMMIT_TRIGGER=$(head -1 "$COMMIT_MSG_FILE" 2>/dev/null) || COMMIT_TRIGGER="$TITLE"
+    else
+        COMMIT_TRIGGER="$TITLE"
+    fi
+    GIT_HASH="$GIT_HASH" GIT_BRANCH="$GIT_BRANCH" COMMIT_TRIGGER="$COMMIT_TRIGGER" \
+    python3 - "$PAYLOAD_FILE" "$STATUS" << 'PYEOF' | smm add-decision - >> "$LOG_FILE" 2>&1
+import json, sys, os
 d = json.load(open(sys.argv[1]))
 payload = {
     "title": d.get("title", ""),
-    "content": d.get("rationale", ""),
     "rationale": d.get("rationale", ""),
+    "type": d.get("type", "technical"),
     "alternatives": d.get("alternatives", []),
     "constraints": d.get("constraints", []),
-    "decision_type": d.get("type", "technical"),
-    "status": sys.argv[2],
+    "confidence": d.get("confidence", 0.80),
     "made_by": "git-commit (lore-hook)",
+    "source": "manual",
+    "context": {
+        "source": "git-commit",
+        "trigger": os.environ.get("COMMIT_TRIGGER", "")[:200],
+        "git_ref": os.environ.get("GIT_HASH", ""),
+        "branch": os.environ.get("GIT_BRANCH", ""),
+    },
 }
 print(json.dumps(payload))
 PYEOF
-    log "graph ingestion dispatched (background, status=$STATUS)"
+    log "decision written to JSONL (status=$STATUS)"
+
+    # ── Run contradiction check in background — commit proceeds instantly ────
+    # smm check takes ~15s (LLM call). Running it detached means the developer
+    # is never blocked. Results land in .smm/contradictions.jsonl and are
+    # surfaced on the next `smm get-context` call or dashboard refresh.
+    smm check >> "$LOG_FILE" 2>&1 &
+    SMM_CHECK_PID=$!
+    disown $SMM_CHECK_PID 2>/dev/null || true
+    echo "🔍 Contradiction check running in background..." > /dev/tty
+    echo "   Results will appear on next session start or in the dashboard." > /dev/tty
+    log "background smm check launched (pid=$SMM_CHECK_PID)"
 fi
 
-log "lore-hook complete — commit proceeds"
+log "lore-hook complete — commit proceeds instantly"
 exit 0
 """
 
@@ -294,16 +316,16 @@ fi
 """
 
 
-def install_capture_script(axiom_hooks_dir: Path | None = None) -> Path:
-    """Write pre-commit-capture.sh to ~/.axiom/hooks/ and chmod +x.
+def install_capture_script(smm_hooks_dir: Path | None = None) -> Path:
+    """Write pre-commit-capture.sh to ~/.smm/hooks/ and chmod +x.
 
     Args:
-        axiom_hooks_dir: Override default ~/.axiom/hooks/. Used for testing.
+        smm_hooks_dir: Override default ~/.smm/hooks/. Used for testing.
 
     Returns:
         Path to the installed script.
     """
-    hooks_dir = axiom_hooks_dir or (Path.home() / ".axiom" / "hooks")
+    hooks_dir = smm_hooks_dir or (Path.home() / ".smm" / "hooks")
     hooks_dir.mkdir(parents=True, exist_ok=True)
 
     script_path = hooks_dir / "pre-commit-capture.sh"

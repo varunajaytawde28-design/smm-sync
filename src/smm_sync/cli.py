@@ -7,7 +7,7 @@ from pathlib import Path
 
 import click
 
-from smm_sync.config import find_project_root, get_smm_dir
+from smm_sync.config import DASHBOARD_PORT, find_project_root, get_smm_dir
 from smm_sync.coordinator import claim as _claim
 from smm_sync.coordinator import is_claimed, list_claimed
 from smm_sync.coordinator import release as _release
@@ -149,6 +149,20 @@ def init(ctx: click.Context, name: str, mode: str) -> None:
             if agent_choice in ("cursor", "both"):
                 if configure_cursor_hook(cwd):
                     click.echo(click.style("  ✓ Cursor hook written to .cursor/hooks.json.", fg="green"))
+
+            # Persist agent choice to .smm/config.json so contradiction
+            # detection in add_decision_local() can route to the right CLI.
+            import json as _json_cfg
+            _config_path = smm_dir / "config.json"
+            _config: dict = {}
+            if _config_path.exists():
+                try:
+                    _config = _json_cfg.loads(_config_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            _config["agent"] = agent_choice
+            _config_path.write_text(_json_cfg.dumps(_config, indent=2), encoding="utf-8")
+
             click.echo(click.style("Axiom Lore-Hook installed.", fg="green"))
         except Exception as _lh_exc:
             click.echo(
@@ -185,7 +199,7 @@ def refresh(quiet: bool) -> None:
 
     import hashlib
     content = agents_md.read_text(encoding="utf-8")
-    new_hash = hashlib.md5(content.encode()).hexdigest()
+    new_hash = hashlib.sha256(content.encode()).hexdigest()
 
     session_id = f"{os.uname().nodename}:{os.getpid()}"
     result = propose(smm_dir, "context_refreshed", session_id, {
@@ -468,6 +482,374 @@ def list_decisions(project: str) -> None:
     asyncio.run(_run())
 
 
+@main.command("get-context")
+@click.option("--project", default="smm-sync", help="Project name.")
+def get_context_cmd(project: str) -> None:
+    """Output a clean summary of project decisions, contradictions, and PM resolutions.
+
+    Readable by AI agents and humans. Shows active contradictions,
+    recent decisions, and ACTION REQUIRED items from PM resolutions.
+
+    Example:
+        smm get-context
+        smm get-context --project mf-tracker
+    """
+    import asyncio
+    import json as _json
+    from datetime import datetime, timezone, timedelta
+
+    try:
+        from smm_sync.context_graph.client import GraphClient
+    except ImportError as exc:
+        click.echo(click.style(f"context_graph unavailable: {exc}", fg="red"), err=True)
+        sys.exit(1)
+
+    smm_dir = get_smm_dir()
+    if not smm_dir.exists():
+        click.echo(click.style("No .smm/ directory found. Run `smm init` first.", fg="red"))
+        sys.exit(1)
+
+    # ── Auto-run smm check if there are unchecked decisions ──────────────────
+    _decisions_path = smm_dir / "decisions.jsonl"
+    _last_check_path = smm_dir / "last_check_timestamp.txt"
+    if _decisions_path.exists():
+        _last_check_ts = None
+        if _last_check_path.exists():
+            try:
+                _ts_str = _last_check_path.read_text(encoding="utf-8").strip()
+                _last_check_ts = datetime.fromisoformat(_ts_str)
+            except Exception:
+                pass
+        _has_new = False
+        if _last_check_ts is None:
+            _has_new = _decisions_path.stat().st_size > 0
+        else:
+            try:
+                for _line in _decisions_path.read_text(encoding="utf-8").splitlines():
+                    _line = _line.strip()
+                    if not _line:
+                        continue
+                    try:
+                        _d = _json.loads(_line)
+                        _ts = datetime.fromisoformat(_d.get("timestamp", "").replace("Z", "+00:00"))
+                        if _ts > _last_check_ts:
+                            _has_new = True
+                            break
+                    except Exception:
+                        _has_new = True
+                        break
+            except Exception:
+                pass
+        if _has_new:
+            click.echo(click.style("Running smm check for unchecked decisions...", fg="cyan"), err=True)
+            import subprocess as _sp
+            try:
+                _res = _sp.run(["smm", "check"], capture_output=True, text=True, timeout=120)
+                if _res.stdout:
+                    click.echo(_res.stdout.rstrip(), err=True)
+            except Exception as _exc:
+                click.echo(click.style(f"  smm check skipped: {_exc}", fg="yellow"), err=True)
+
+    # ── Enforcement: check for architectural violations before returning context ─
+    from smm_sync.mcp_server import _run_verification, _build_block_message
+    violations = _run_verification(smm_dir)
+    if violations:
+        click.echo(
+            click.style(
+                f"⛔ BLOCKED: {len(violations)} architectural violation"
+                f"{'s' if len(violations) != 1 else ''} found",
+                fg="red",
+                bold=True,
+            )
+        )
+        click.echo("")
+        for i, v in enumerate(violations, 1):
+            click.echo(f"  {i}. {v}")
+        click.echo("")
+        block_msg = _build_block_message(violations)
+        if "COMMANDS TO FIX:" in block_msg:
+            fix_section = block_msg.split("COMMANDS TO FIX:", 1)[1].split("\n\nAfter fixing")[0]
+            click.echo("COMMANDS TO FIX:")
+            click.echo(fix_section.strip())
+            click.echo("")
+        click.echo("After fixing, run `smm get-context` again.")
+        sys.exit(1)
+
+    graph_dir = smm_dir / "graph"
+    client = GraphClient(graph_dir=graph_dir)
+
+    async def _run():
+        # ── 1. Load decisions from Kuzu ──────────────────────────────────────
+        try:
+            decisions = await client.get_decisions(project=project)
+        except Exception as exc:
+            click.echo(click.style(f"Failed to load decisions: {exc}", fg="red"), err=True)
+            decisions = []
+
+        # Count by type
+        type_counts: dict[str, int] = {}
+        for d in decisions:
+            content = d.content or ""
+            dt = "architectural"
+            if "Decision type: technical" in content or "technical" in content.lower():
+                dt = "technical"
+            elif "Decision type: product" in content or "product" in content.lower():
+                dt = "product"
+            type_counts[dt] = type_counts.get(dt, 0) + 1
+
+        # ── 2. Recent decisions (last 7 days) ────────────────────────────────
+        cutoff_7d = datetime.now(timezone.utc) - timedelta(days=7)
+        recent: list[dict] = []
+        for d in decisions:
+            created = d.created_at
+            if hasattr(created, "replace"):
+                # Kuzu returns naive datetime — make it UTC-aware
+                try:
+                    created = created.replace(tzinfo=timezone.utc)
+                except Exception:
+                    pass
+            if hasattr(created, "timestamp") and created >= cutoff_7d:
+                conf = 0.80
+                dt = "technical"
+                for line in (d.content or "").splitlines():
+                    if line.startswith("Confidence:"):
+                        try:
+                            conf = float(line.split(":", 1)[1].strip())
+                        except Exception:
+                            pass
+                    if line.startswith("Decision type:"):
+                        dt = line.split(":", 1)[1].strip()
+                recent.append({"title": d.title or "", "type": dt, "confidence": conf})
+
+        # ── 3. Load contradictions ────────────────────────────────────────────
+        contra_path = smm_dir / "contradictions.jsonl"
+        all_contras: list[dict] = []
+        if contra_path.exists():
+            for line in contra_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line:
+                    try:
+                        all_contras.append(_json.loads(line))
+                    except Exception:
+                        pass
+
+        active_contras = [c for c in all_contras if not c.get("resolved", False)]
+
+        # ── 4. Load contradiction_index.json (resolved pairs) ────────────────
+        idx_path = smm_dir / "contradiction_index.json"
+        idx: dict = {"pairs": []}
+        if idx_path.exists():
+            try:
+                idx = _json.loads(idx_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+        cutoff_30d = datetime.now(timezone.utc) - timedelta(days=30)
+        resolved_pairs = []
+        action_required = []
+
+        for pair in idx.get("pairs", []):
+            if pair.get("status") != "resolved":
+                continue
+            actioned_str = pair.get("actioned_at", "")
+            if not actioned_str:
+                continue
+            try:
+                actioned_dt = datetime.fromisoformat(actioned_str.replace("Z", "+00:00"))
+            except Exception:
+                continue
+            if actioned_dt < cutoff_30d:
+                continue
+
+            winner = pair.get("decision_a_title", "")
+            loser = pair.get("decision_b_title", "")
+            note = pair.get("note", "")
+            actor = pair.get("actioned_by", "dashboard")
+            date_str = actioned_str[:10]
+
+            # Check if implemented
+            already_done = False
+            try:
+                impl_rows, _, _ = await client._driver.execute_query(
+                    "MATCH (e:Episodic) WHERE e.name STARTS WITH 'Implemented PM resolution' "
+                    "RETURN e.name LIMIT 50"
+                )
+                for r in impl_rows:
+                    name = r.get("e.name", "") or ""
+                    if winner and winner[:30].lower() in name.lower():
+                        already_done = True
+                        break
+            except Exception:
+                pass
+
+            resolved_pairs.append({
+                "winner": winner, "loser": loser, "note": note,
+                "actor": actor, "date": date_str, "already_done": already_done,
+            })
+            if not already_done:
+                action_required.append({
+                    "winner": winner, "loser": loser, "note": note, "date": date_str,
+                })
+
+        # ── 5. Format output ──────────────────────────────────────────────────
+        total = len(decisions)
+        type_summary = ", ".join(
+            f"{v} {k}" for k, v in sorted(type_counts.items())
+        )
+
+        click.echo("---")
+        click.echo(f"Project: {project}")
+        click.echo(f"Decisions: {total} total ({type_summary})")
+        click.echo("")
+
+        if recent:
+            click.echo("Recent decisions (last 7 days):")
+            for i, d in enumerate(recent[:5], 1):
+                conf_pct = int(d["confidence"] * 100)
+                click.echo(f"  {i}. {d['title']} [{d['type']}, {d['confidence']:.2f}]")
+            click.echo("")
+
+        if active_contras:
+            click.echo("Active contradictions (need resolution):")
+            for c in active_contras:
+                a = c.get("decision_a", "")
+                b = c.get("decision_b", "")
+                click.echo(f'  \u26a0 "{a}" \u2194 "{b}"')
+            click.echo("")
+
+        if resolved_pairs:
+            click.echo("Resolved contradictions (last 30 days):")
+            for rp in resolved_pairs:
+                if rp["already_done"]:
+                    status = "\u2713 IMPLEMENTED"
+                else:
+                    status = "\u2713 KEEP"
+                click.echo(
+                    f'  {status}: "{rp["winner"]}" \u2014 SUPERSEDED: "{rp["loser"]}"'
+                )
+                click.echo(f'    Resolved by: {rp["actor"]} on {rp["date"]}')
+                if rp["note"]:
+                    click.echo(f'    Note: {rp["note"]}')
+            click.echo("")
+
+        if action_required:
+            click.echo("ACTION REQUIRED \u2014 Implement these PM resolutions:")
+            for i, ar in enumerate(action_required, 1):
+                click.echo(f"  {i}. Codebase must use {ar['winner']}, NOT {ar['loser']}")
+            click.echo(
+                "  Review and refactor any code that still follows superseded decisions."
+            )
+            click.echo("")
+
+        click.echo("---")
+
+    asyncio.run(_run())
+
+
+def _server_running_on_port(port: int) -> bool:
+    """Non-blocking check: is something listening on localhost:port?
+
+    Used by add-decision and add-decisions-batch to detect whether the smm-sync
+    dashboard is running before attempting a direct Kuzu write.  If the dashboard
+    is running it holds the Kuzu exclusive lock; routing through it avoids the
+    lock conflict (Bug 1 fix).
+
+    Args:
+        port: TCP port to probe.
+
+    Returns:
+        True if a server responded on localhost:port within 100 ms.
+    """
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.1)
+        return s.connect_ex(("localhost", port)) == 0
+
+
+def _post_decision_to_dashboard(
+    data: dict,
+    content: str,
+    project: str,
+    port: int = DASHBOARD_PORT,
+) -> str:
+    """POST a decision to the running dashboard server and return the decision id.
+
+    The dashboard's POST /api/decisions endpoint calls add_decision_local() which
+    already holds the Kuzu connection, so there is no lock conflict.
+
+    Args:
+        data: Raw JSON dict from the CLI input.
+        content: Pre-built content string (may include Status line).
+        project: Project name for the graph.
+        port: Dashboard port (default 7842).
+
+    Returns:
+        Decision id string returned by the server.
+
+    Raises:
+        Exception: Any network or HTTP error propagates to the caller.
+    """
+    import json as _json
+    import urllib.request as _urllib_req
+
+    payload = _json.dumps({
+        "title": data.get("title", "Unnamed decision"),
+        "content": content,
+        "rationale": data.get("rationale", ""),
+        "made_by": data.get("made_by", "lore-hook"),
+        "decision_type": data.get("decision_type", data.get("type", "technical")),
+        "alternatives": data.get("alternatives", []),
+        "constraints": data.get("constraints", []),
+        "source_type": data.get("source_type", "manual"),
+        "confidence": data.get("confidence"),
+    }).encode()
+    req = _urllib_req.Request(
+        f"http://localhost:{port}/api/decisions",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with _urllib_req.urlopen(req, timeout=10) as resp:
+        result = _json.loads(resp.read())
+    return result.get("id") or result.get("decision_id") or "routed"
+
+
+def _find_rust_binary() -> str | None:
+    """Locate the smm-fast-write Rust binary.
+
+    Checks in order:
+      1. SMM_FAST_WRITE_BIN environment variable override.
+      2. smm-fast-write on PATH (installed via maturin / pip).
+      3. rust_cli/target/release/smm-fast-write relative to the repo root
+         (local dev build via ``cargo build --release``).
+
+    Returns:
+        Absolute path string to an executable binary, or None if not found.
+    """
+    import shutil
+    from pathlib import Path as _Path
+
+    candidates: list[_Path] = []
+
+    if os.environ.get("SMM_FAST_WRITE_BIN"):
+        candidates.append(_Path(os.environ["SMM_FAST_WRITE_BIN"]))
+
+    which = shutil.which("smm-fast-write")
+    if which:
+        candidates.append(_Path(which))
+
+    # Resolve repo root from this file: src/smm_sync/cli.py → ../../
+    _pkg_file = _Path(__file__)
+    candidates.append(
+        _pkg_file.parents[3] / "rust_cli" / "target" / "release" / "smm-fast-write"
+    )
+
+    for c in candidates:
+        if c.is_file() and os.access(str(c), os.X_OK):
+            return str(c)
+    return None
+
+
 @main.command("add-decision")
 @click.argument("source", type=click.File("r"), default="-", metavar="[JSON_FILE|-]")
 @click.option("--project", default="smm-sync", help="Project name.")
@@ -476,31 +858,33 @@ def list_decisions(project: str) -> None:
     "use_local",
     is_flag=True,
     default=False,
-    help=(
-        "Write directly to Kuzu, skipping Graphiti entity extraction. "
-        "Zero API calls. Uses pre-extracted JSON fields from the hook. "
-        "ANTHROPIC_API_KEY not required."
-    ),
+    help="Kept for backward compatibility. Both paths now write to JSONL only.",
 )
-def add_decision_cmd(source: click.File, project: str, use_local: bool) -> None:
-    """Ingest a decision from JSON. Reads from stdin (-) or a file.
+@click.option(
+    "--context",
+    "ctx_note",
+    default=None,
+    help="Context note: PRD name, ticket ID, or source description (e.g. 'PRD-001: Legacy Migration').",
+)
+def add_decision_cmd(source: click.File, project: str, use_local: bool, ctx_note: str | None) -> None:
+    """Record a decision from JSON. Reads from stdin (-) or a file.
 
-    JSON fields: title, content, rationale, made_by, decision_type,
-    alternatives (list), constraints (list), status, confidence.
+    Hot path: tries the compiled Rust binary (smm-fast-write) first — ~10 ms.
+    Falls back to a pure-Python JSONL append if Rust is unavailable — < 500 ms.
+    Neither path loads Kuzu, embeddings, or an LLM.
 
-    Used by the Axiom Lore-Hook (pre-commit-capture.sh) for automatic
-    capture. Can also be called directly for manual entry.
+    Kuzu sync and contradiction detection happen lazily in ``smm check``.
 
-    Use --local when the hook has already extracted the structured fields
-    (title, rationale, alternatives, constraints) and you want to skip
-    Graphiti's Sonnet entity extraction. Zero API calls, no key needed.
+    JSON fields: title (required), rationale (required), type (required),
+    confidence, alternatives (list), constraints (list), made_by, source.
 
     Example:
-        echo '{"title":"Use Kuzu","rationale":"No Docker needed"}' | smm add-decision --local -
-        echo '{"title":"Use Kuzu","rationale":"No Docker needed"}' | smm add-decision -
+        echo '{"title":"Use Kuzu","rationale":"No Docker needed","type":"technical"}' \\
+            | smm add-decision -
+        smm add-decision --local decision.json   # --local flag kept for compat
     """
-    import asyncio
     import json as _json
+    import subprocess as _subprocess
 
     try:
         data = _json.load(source)
@@ -508,71 +892,501 @@ def add_decision_cmd(source: click.File, project: str, use_local: bool) -> None:
         click.echo(click.style(f"Invalid JSON: {exc}", fg="red"), err=True)
         sys.exit(1)
 
+    # Normalise: if caller passed "decision_type" map to "type" for Rust binary.
+    if "decision_type" in data and "type" not in data:
+        data["type"] = data["decision_type"]
+    if "project" not in data:
+        data["project"] = project
+    # --context flag: inject into data if not already provided in the JSON
+    if ctx_note and "context" not in data:
+        data["context"] = {"source": ctx_note, "trigger": "", "git_ref": "", "branch": ""}
+
+    # ── 1. Try Rust binary ──────────────────────────────────────────────────
+    if not os.environ.get("SMM_NO_RUST"):
+        rust_bin = _find_rust_binary()
+        if rust_bin:
+            try:
+                result = _subprocess.run(
+                    [rust_bin],
+                    input=_json.dumps(data),
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if result.returncode == 0:
+                    click.echo(result.stdout.strip())
+                    return
+                # Non-zero exit: fall through to Python path.
+                click.echo(
+                    click.style(
+                        f"Rust binary failed (exit {result.returncode}), using Python fallback",
+                        fg="yellow",
+                    ),
+                    err=True,
+                )
+                if result.stderr:
+                    click.echo(result.stderr.strip(), err=True)
+            except (_subprocess.TimeoutExpired, OSError):
+                pass  # fall through silently
+
+    # ── 2. Python JSONL fallback ────────────────────────────────────────────
+    try:
+        from smm_sync.jsonl_writer import write_decision
+    except ImportError as exc:
+        click.echo(click.style(f"jsonl_writer unavailable: {exc}", fg="red"), err=True)
+        sys.exit(1)
+
+    try:
+        write_decision(data, project=project)
+        _title = data.get("title", "Unnamed decision")
+        click.echo(click.style(f"\u2713 Decision: {_title} \u2014 recorded", fg="green"))
+    except Exception as exc:
+        click.echo(click.style(f"Ingestion failed: {exc}", fg="red"), err=True)
+        sys.exit(1)
+
+
+@main.command("add-decisions-batch")
+@click.argument("source", type=click.Path(exists=True), metavar="JSONL_FILE")
+@click.option("--project", default="smm-sync", help="Project name.")
+def add_decisions_batch_cmd(source: str, project: str) -> None:
+    """Ingest multiple decisions from a JSONL file in a single process.
+
+    Loads the sentence-transformers model exactly once for the whole batch,
+    then writes each decision sequentially — far faster than running
+    smm add-decision 32 times.
+
+    JSONL_FILE: path to a file with one JSON decision object per line.
+
+    Each line format (all fields optional except title):
+        {"title": "...", "rationale": "...", "decision_type": "technical",
+         "made_by": "...", "alternatives": [...], "constraints": [...]}
+
+    Lines starting with '#' or blank lines are skipped.
+
+    Example:
+        smm add-decisions-batch decisions.jsonl
+        smm add-decisions-batch --project fintrack sprint1.jsonl
+    """
+    import asyncio as _asyncio
+    import json as _json
+
     try:
         from smm_sync.context_graph.client import GraphClient
     except ImportError as exc:
         click.echo(click.style(f"context_graph unavailable: {exc}", fg="red"), err=True)
         sys.exit(1)
 
-    # Build episode body with optional Status field
-    status = data.get("status", "approved")
-    content = data.get("content") or data.get("rationale", "")
-    # Append status line — parsed back by dashboard /api/decisions?status=
-    if status != "approved":
-        content = f"{content}\nStatus: {status}"
-
     smm_dir = get_smm_dir()
     graph_dir = smm_dir / "graph"
 
-    if use_local:
-        # Zero-API path: write pre-extracted data directly to Kuzu.
-        # No ANTHROPIC_API_KEY required. Bypasses Graphiti.add_episode().
+    # Bug 1: check if dashboard server is running — route through it if so.
+    use_server = _server_running_on_port(DASHBOARD_PORT)
+    if use_server:
+        click.echo(
+            click.style(
+                f"Dashboard detected on port {DASHBOARD_PORT} — routing all decisions through server.",
+                fg="yellow",
+            )
+        )
+
+    # Parse JSONL file
+    lines: list[tuple[int, dict]] = []
+    with open(source) as f:
+        for lineno, line in enumerate(f, 1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                lines.append((lineno, _json.loads(line)))
+            except _json.JSONDecodeError as exc:
+                click.echo(
+                    click.style(f"Line {lineno}: invalid JSON — {exc}", fg="red"), err=True
+                )
+
+    if not lines:
+        click.echo(click.style("No decisions found in file.", fg="yellow"))
+        return
+
+    click.echo(f"Ingesting {len(lines)} decisions...")
+
+    ok, failed = 0, 0
+
+    if use_server:
+        # Route all decisions through the running dashboard server
+        for lineno, data in lines:
+            content = data.get("content") or data.get("rationale", "")
+            status = data.get("status", "approved")
+            if status != "approved":
+                content = f"{content}\nStatus: {status}"
+            try:
+                decision_id = _post_decision_to_dashboard(data, content, project)
+                click.echo(click.style(
+                    f"  [{ok+1:3d}] {data.get('title', '')[:60]}", fg="green"
+                ))
+                ok += 1
+            except Exception as exc:
+                click.echo(
+                    click.style(f"  [ERR] line {lineno}: {exc}", fg="red"), err=True
+                )
+                failed += 1
+    else:
+        # Bug 3: single GraphClient instance — model loads exactly once
         client = GraphClient(graph_dir=graph_dir, api_key="")
 
-        async def _run():
-            return await client.add_decision_local(
-                title=data.get("title", "Unnamed decision"),
-                content=content,
-                rationale=data.get("rationale", ""),
-                made_by=data.get("made_by", "lore-hook"),
-                project=project,
-                alternatives=data.get("alternatives", []),
-                constraints=data.get("constraints", []),
-                decision_type=data.get("decision_type", "technical"),
+        async def _run_batch():
+            nonlocal ok, failed
+            for lineno, data in lines:
+                content = data.get("content") or data.get("rationale", "")
+                status = data.get("status", "approved")
+                if status != "approved":
+                    content = f"{content}\nStatus: {status}"
+                try:
+                    decision_id = await client.add_decision_local(
+                        title=data.get("title", "Unnamed decision"),
+                        content=content,
+                        rationale=data.get("rationale", ""),
+                        made_by=data.get("made_by", "lore-hook"),
+                        project=project,
+                        alternatives=data.get("alternatives", []),
+                        constraints=data.get("constraints", []),
+                        decision_type=data.get("decision_type", data.get("type", "technical")),
+                        confidence=data.get("confidence"),
+                    )
+                    click.echo(click.style(
+                        f"  [{ok+1:3d}] {data.get('title', '')[:60]}", fg="green"
+                    ))
+                    ok += 1
+                except Exception as exc:
+                    click.echo(
+                        click.style(f"  [ERR] line {lineno}: {exc}", fg="red"), err=True
+                    )
+                    failed += 1
+
+        _asyncio.run(_run_batch())
+
+    color = "green" if not failed else "yellow"
+    click.echo(click.style(f"\n{ok}/{ok + failed} decisions ingested.", fg=color))
+    if failed:
+        sys.exit(1)
+
+
+@main.command("check")
+@click.option("--all", "check_all", is_flag=True, default=False,
+              help="Re-process all decisions, not just new ones.")
+@click.option("--project", default="smm-sync", help="Project name.")
+def check_cmd(check_all: bool, project: str) -> None:
+    """Sync new decisions from JSONL into Kuzu, detect contradictions, build edges.
+
+    This is the ONLY command that loads heavy dependencies:
+    Kuzu graph database, sentence-transformers embeddings, and optionally
+    ``claude -p`` for contradiction detection.  Target: < 15 seconds.
+
+    Run periodically (e.g. post-commit hook) or manually to keep the graph
+    up to date with decisions written by ``smm add-decision``.
+
+    Example:
+        smm check
+        smm check --all   # re-check every decision from scratch
+    """
+    import asyncio as _asyncio
+    import json as _json
+    from datetime import datetime as _datetime, timezone as _timezone
+
+    smm_dir = get_smm_dir()
+    decisions_path = smm_dir / "decisions.jsonl"
+
+    if not decisions_path.exists():
+        click.echo(
+            click.style(
+                "No decisions.jsonl found. Run `smm add-decision` first.", fg="yellow"
             )
-    else:
-        # Full Graphiti path: entity extraction via Sonnet. Requires API key.
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not api_key:
+        )
+        return
+
+    # ── Read all decisions from JSONL ───────────────────────────────────────
+    all_decisions: list[dict] = []
+    for raw_line in decisions_path.read_text(encoding="utf-8").splitlines():
+        raw_line = raw_line.strip()
+        if raw_line:
+            try:
+                all_decisions.append(_json.loads(raw_line))
+            except Exception:
+                pass
+
+    # ── Find new decisions since last check ─────────────────────────────────
+    last_check_path = smm_dir / "last_check_timestamp.txt"
+    last_check_ts: _datetime | None = None
+    if last_check_path.exists() and not check_all:
+        try:
+            ts_str = last_check_path.read_text(encoding="utf-8").strip()
+            last_check_ts = _datetime.fromisoformat(ts_str)
+        except Exception:
+            pass
+
+    new_decisions: list[dict] = []
+    for d in all_decisions:
+        if check_all or last_check_ts is None:
+            new_decisions.append(d)
+        else:
+            ts_str = d.get("timestamp", "")
+            try:
+                ts = _datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                if ts > last_check_ts:
+                    new_decisions.append(d)
+            except Exception:
+                new_decisions.append(d)  # include if timestamp unparseable
+
+    if not new_decisions and not check_all:
+        click.echo(
+            click.style(
+                f"No new decisions since last check. "
+                f"{len(all_decisions)} total in JSONL.",
+                fg="cyan",
+            )
+        )
+        return
+
+    click.echo(
+        click.style(
+            f"Syncing {len(new_decisions)} new decision(s) into graph "
+            f"(of {len(all_decisions)} total)...",
+            fg="cyan",
+        )
+    )
+
+    # ── Open Kuzu graph ─────────────────────────────────────────────────────
+    try:
+        from smm_sync.context_graph.client import GraphClient
+    except ImportError as exc:
+        click.echo(
+            click.style(f"context_graph unavailable: {exc}", fg="red"), err=True
+        )
+        return
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    graph_dir = smm_dir / "graph"
+    client = GraphClient(graph_dir=graph_dir, api_key=api_key)
+
+    # ── Read .smm/config.json for agent type ────────────────────────────────
+    agent_cfg = "skip"
+    try:
+        cfg_path = smm_dir / "config.json"
+        if cfg_path.exists():
+            agent_cfg = _json.loads(cfg_path.read_text(encoding="utf-8")).get(
+                "agent", "skip"
+            )
+    except Exception:
+        pass
+
+    async def _run_check():
+        synced = 0
+        all_new_titles: list[str] = []
+
+        # Snapshot contradictions.jsonl line count before sync so we can count
+        # new entries added by add_decision_local() AND the fallback check below.
+        _contra_path = smm_dir / "contradictions.jsonl"
+        _contra_lines_before = 0
+        try:
+            if _contra_path.exists():
+                _contra_lines_before = sum(
+                    1 for ln in _contra_path.read_text(encoding="utf-8").splitlines()
+                    if ln.strip()
+                )
+        except Exception:
+            pass
+
+        # 1. Sync new decisions into Kuzu via add_decision_local
+        for d in new_decisions:
+            title = d.get("title", "")
+            alts_raw = d.get("alternatives", "")
+            cons_raw = d.get("constraints", "")
+            alternatives = alts_raw.split("; ") if isinstance(alts_raw, str) else (alts_raw or [])
+            constraints = cons_raw.split("; ") if isinstance(cons_raw, str) else (cons_raw or [])
+            try:
+                await client.add_decision_local(
+                    title=title,
+                    content=d.get("rationale", ""),
+                    rationale=d.get("rationale", ""),
+                    made_by=d.get("made_by", "lore-hook"),
+                    project=d.get("project", project),
+                    alternatives=alternatives,
+                    constraints=constraints,
+                    decision_type=d.get("type", "technical"),
+                    source_type=d.get("source", "manual"),
+                    confidence=d.get("confidence"),
+                )
+                synced += 1
+                all_new_titles.append(title)
+            except Exception as exc:
+                click.echo(
+                    click.style(f"  Warning: failed to sync '{title[:50]}': {exc}", fg="yellow"),
+                    err=True,
+                )
+
+        # 2. Contradiction detection via claude -p (once for all new decisions)
+        new_contras_count = 0
+        if all_new_titles and agent_cfg != "skip":
+            try:
+                all_decisions_now = await client.get_decisions(project=project)
+                _numbered = "\n".join(
+                    f"{i+1}. {d.title}: {(d.rationale or d.content or '').strip()[:120]}"
+                    for i, d in enumerate(all_decisions_now)
+                )
+                prompt = (
+                    f"Here are all architectural decisions for this project:\n{_numbered}\n\n"
+                    "Find any pairs that directly contradict each other (e.g. conflicting tech choices, "
+                    "opposing strategies). Output JSON array only: "
+                    '[{"decision_a":"<title>","decision_b":"<title>","reason":"<brief>"}]. '
+                    "Empty array [] if none."
+                )
+                # Strip CLAUDECODE env vars for nested session safety
+                import subprocess as _sp
+                import tempfile as _tempfile
+                _safe_env = os.environ.copy()
+                for _var in [
+                    "CLAUDECODE",
+                    "CLAUDE_CODE_ENTRYPOINT",
+                    "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY",
+                    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+                ]:
+                    _safe_env.pop(_var, None)
+                _safe_env["CLAUDE_CODE_TMPDIR"] = _tempfile.mkdtemp(prefix="smm-check-")
+
+                _result = await _asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: _sp.run(
+                        ["claude", "-p", prompt],
+                        capture_output=True, text=True,
+                        timeout=60, env=_safe_env,
+                    ),
+                )
+                if _result.returncode == 0:
+                    import re as _re
+                    _raw = _result.stdout.strip()
+                    _m = _re.search(r"\[.*\]", _raw, _re.DOTALL)
+                    if _m:
+                        try:
+                            _contras = _json.loads(_m.group(0))
+                            contra_path = smm_dir / "contradictions.jsonl"
+                            import uuid as _uuid_mod
+                            now_ts = _datetime.now(_timezone.utc).strftime(
+                                "%Y-%m-%dT%H:%M:%SZ"
+                            )
+                            # Load existing pair keys to skip reversed duplicates
+                            _cli_seen_keys: set[tuple] = set()
+                            try:
+                                if contra_path.exists():
+                                    for _ln in contra_path.read_text(encoding="utf-8").splitlines():
+                                        _ln = _ln.strip()
+                                        if _ln:
+                                            try:
+                                                _ex = _json.loads(_ln)
+                                                _da = (_ex.get("decision_a", "") or "").lower().strip()
+                                                _db = (_ex.get("decision_b", "") or "").lower().strip()
+                                                if _da and _db:
+                                                    _cli_seen_keys.add(tuple(sorted([_da, _db])))
+                                            except Exception:
+                                                pass
+                            except Exception:
+                                pass
+                            for _c in _contras:
+                                _da_t = _c.get("decision_a", "")
+                                _db_t = _c.get("decision_b", "")
+                                # Skip self-contradictions and reversed duplicates
+                                if _da_t.lower().strip() == _db_t.lower().strip():
+                                    continue
+                                _pk = tuple(sorted([_da_t.lower().strip(), _db_t.lower().strip()]))
+                                if _pk in _cli_seen_keys:
+                                    continue
+                                _cli_seen_keys.add(_pk)
+                                _entry = {
+                                    "id": str(_uuid_mod.uuid4()),
+                                    "decision_a": _da_t,
+                                    "decision_b": _db_t,
+                                    "reason": _c.get("reason", ""),
+                                    "detected_at": now_ts,
+                                    "resolved": False,
+                                }
+                                with open(contra_path, "a", encoding="utf-8") as _fh:
+                                    _fh.write(_json.dumps(_entry) + "\n")
+                                new_contras_count += 1
+                        except Exception:
+                            pass
+            except Exception as _exc:
+                click.echo(
+                    click.style(f"  claude -p check skipped: {_exc}", fg="yellow"),
+                    err=True,
+                )
+        elif all_new_titles:
+            # Local embedding heuristic fallback (no claude -p needed)
+            try:
+                for d_new in new_decisions:
+                    _lc = await client.contradiction_check(
+                        f"{d_new.get('title', '')}: {d_new.get('rationale', '')}",
+                        project,
+                    )
+                    if _lc:
+                        contra_path = smm_dir / "contradictions.jsonl"
+                        import uuid as _uuid_mod
+                        now_ts = _datetime.now(_timezone.utc).strftime(
+                            "%Y-%m-%dT%H:%M:%SZ"
+                        )
+                        for _c in _lc:
+                            _entry = {
+                                "id": str(_uuid_mod.uuid4()),
+                                "decision_a": d_new.get("title", ""),
+                                "decision_b": _c.get("existing", ""),
+                                "reason": f"similarity={_c.get('similarity', 0):.2f}",
+                                "detected_at": now_ts,
+                                "resolved": False,
+                            }
+                            with open(contra_path, "a", encoding="utf-8") as _fh:
+                                _fh.write(_json.dumps(_entry) + "\n")
+                            new_contras_count += 1
+            except Exception as _exc:
+                click.echo(
+                    click.style(f"  Local contradiction check skipped: {_exc}", fg="yellow"),
+                    err=True,
+                )
+
+        # 3. Build edges between related decisions
+        try:
+            await client.discover_edges(project=project)
+        except Exception as _exc:
             click.echo(
-                click.style(
-                    "ANTHROPIC_API_KEY not set — cannot ingest decision. "
-                    "Use --local to write without API calls.",
-                    fg="red",
-                ),
-                err=True,
+                click.style(f"  Edge discovery skipped: {_exc}", fg="yellow"), err=True
             )
-            sys.exit(1)
 
-        client = GraphClient(graph_dir=graph_dir, api_key=api_key)
+        # 4. Update last_check_timestamp
+        now_iso = _datetime.now(_timezone.utc).isoformat()
+        last_check_path.write_text(now_iso, encoding="utf-8")
 
-        async def _run():
-            return await client.add_decision(
-                title=data.get("title", "Unnamed decision"),
-                content=content,
-                rationale=data.get("rationale", ""),
-                made_by=data.get("made_by", "lore-hook"),
-                project=project,
-                alternatives=data.get("alternatives", []),
-                constraints=data.get("constraints", []),
-                decision_type=data.get("decision_type", "technical"),
-            )
+        # Count ALL new contradictions written during this run (from both
+        # add_decision_local() in step 1 and the fallback check in step 2)
+        # by diffing the line count of contradictions.jsonl.
+        _contra_lines_after = 0
+        try:
+            if _contra_path.exists():
+                _contra_lines_after = sum(
+                    1 for ln in _contra_path.read_text(encoding="utf-8").splitlines()
+                    if ln.strip()
+                )
+        except Exception:
+            pass
+        return synced, _contra_lines_after - _contra_lines_before
 
     try:
-        decision_id = asyncio.run(_run())
-        click.echo(click.style(f"Decision ingested: {decision_id}", fg="green"))
+        synced, contra_count = _asyncio.run(_run_check())
+        click.echo(
+            click.style(
+                f"Checked {synced} new decision(s) against "
+                f"{len(all_decisions) - len(new_decisions)} existing. "
+                f"Found {contra_count} contradiction(s).",
+                fg="green",
+            )
+        )
     except Exception as exc:
-        click.echo(click.style(f"Ingestion failed: {exc}", fg="red"), err=True)
+        click.echo(click.style(f"smm check failed: {exc}", fg="red"), err=True)
         sys.exit(1)
 
 
@@ -587,6 +1401,9 @@ def check_contradictions_cmd(title: str, content: str, project: str, json_output
 
     Used by the Axiom Lore-Hook to surface contradictions before commit.
     Returns JSON with --json-output flag for scripting.
+
+    Already-actioned pairs (resolved/deferred/ignored in contradiction_index.json)
+    are filtered out so the same conflict is never re-flagged to the developer.
 
     Example:
         smm check-contradictions --title "Use Redis" --json-output
@@ -605,9 +1422,8 @@ def check_contradictions_cmd(title: str, content: str, project: str, json_output
 
     smm_dir = get_smm_dir()
     if not smm_dir.exists():
-        result = {"contradictions": []}
         if json_output:
-            click.echo(_json.dumps(result))
+            click.echo(_json.dumps({"contradictions": []}))
         return
 
     graph_dir = smm_dir / "graph"
@@ -619,6 +1435,11 @@ def check_contradictions_cmd(title: str, content: str, project: str, json_output
 
     try:
         contradictions = asyncio.run(_run())
+
+        # Filter out pairs already actioned in the index
+        from smm_sync.contradiction_index import filter_new_contradictions
+        contradictions = filter_new_contradictions(smm_dir, contradictions, new_title=title)
+
         result = {"contradictions": contradictions}
         if json_output:
             click.echo(_json.dumps(result))
@@ -634,6 +1455,287 @@ def check_contradictions_cmd(title: str, content: str, project: str, json_output
             click.echo(_json.dumps({"contradictions": [], "error": str(exc)}))
         else:
             click.echo(click.style(f"Check failed: {exc}", fg="red"), err=True)
+
+
+@main.command("handle-contradictions")
+@click.option("--title", required=True, help="Title of the new decision being committed.")
+@click.option("--contra-file", "contra_file", required=True, type=click.Path(exists=True),
+              help="Path to JSON file output by check-contradictions --json-output.")
+@click.option("--non-interactive", "non_interactive", is_flag=True, default=False,
+              help="Skip prompts and automatically defer all (CI/CD mode).")
+@click.option("--project", default="smm-sync", help="Project name.")
+def handle_contradictions_cmd(
+    title: str,
+    contra_file: str,
+    non_interactive: bool,
+    project: str,
+) -> None:
+    """Interactive R/D/I handler for contradictions detected at commit time.
+
+    Reads the JSON produced by ``smm check-contradictions --json-output``,
+    presents each new contradiction with an [R]esolve / [D]efer / [I]gnore
+    prompt, records every action in ``.smm/contradiction_index.json`` so the
+    pair is never re-flagged, and prints the overall decision status
+    (``approved`` or ``deferred``) to stdout for the shell to capture.
+
+    All interactive output goes to stderr (redirected to /dev/tty by the hook).
+
+    Non-interactive mode (``--non-interactive`` or CI=true in env):
+      every contradiction is automatically deferred.
+
+    Args:
+        title: Title of the new decision being checked in.
+        contra_file: Path to the JSON file from check-contradictions.
+        non_interactive: If True, skip prompts and defer everything.
+        project: Project name (unused here, for future scoping).
+    """
+    import json as _json
+    import sys as _sys
+
+    smm_dir = get_smm_dir()
+    from smm_sync.contradiction_index import (
+        load_index,
+        is_actioned,
+        record_action,
+    )
+
+    # Load the contradiction list
+    try:
+        data = _json.loads(Path(contra_file).read_text(encoding="utf-8"))
+        contradictions = data.get("contradictions", [])
+    except Exception as exc:
+        click.echo(f"[handle-contradictions] failed to read {contra_file}: {exc}", err=True)
+        click.echo("deferred")
+        return
+
+    if not contradictions:
+        click.echo("approved")
+        return
+
+    # CI / non-interactive guard
+    is_ci = (
+        non_interactive
+        or os.environ.get("CI", "").lower() in ("true", "1", "yes")
+        or os.environ.get("AXIOM_NON_INTERACTIVE", "") == "1"
+    )
+
+    # Determine if /dev/tty is reachable
+    tty_available = False
+    if not is_ci:
+        try:
+            with open("/dev/tty", "r"):
+                tty_available = True
+        except OSError:
+            pass
+
+    def _tty_print(msg: str) -> None:
+        """Write msg to stderr (hook redirects stderr → /dev/tty)."""
+        click.echo(msg, err=True)
+
+    def _tty_prompt(msg: str) -> str:
+        """Prompt on /dev/tty if available, else return ''."""
+        if not tty_available:
+            return ""
+        try:
+            with open("/dev/tty", "r") as _tin, open("/dev/tty", "w") as _tout:
+                _tout.write(msg)
+                _tout.flush()
+                return _tin.readline().strip()
+        except OSError:
+            return ""
+
+    # Header
+    _tty_print("")
+    _tty_print(
+        f"\033[33m⚠  Axiom: {len(contradictions)} contradiction(s) detected\033[0m"
+    )
+    _tty_print("")
+    for idx, c in enumerate(contradictions, 1):
+        existing = c.get("existing", "unknown")
+        sim = c.get("similarity", 0.0)
+        reason = c.get("reason", f"Similarity {sim:.0%}")
+        _tty_print(f'{idx}. "{title}" conflicts with "{existing}"')
+        _tty_print(f"   Reason: {reason}")
+        _tty_print("")
+
+    if is_ci:
+        _tty_print("   Non-interactive mode — deferring all contradictions to PM.")
+        _tty_print("")
+
+    # Per-contradiction R/D/I loop
+    overall_deferred = False
+
+    for idx, c in enumerate(contradictions, 1):
+        existing = c.get("existing", "unknown")
+
+        if is_ci:
+            choice = "D"
+        else:
+            raw = _tty_prompt(
+                f"  Contradiction {idx}/{len(contradictions)}: \"{existing}\"\n"
+                f"    [R] Resolve now   [D] Defer to PM   [I] Ignore\n"
+                f"    Choice [R/D/I, default=D]: "
+            )
+            choice = (raw.strip().upper() or "D")[:1]
+            if choice not in ("R", "D", "I"):
+                choice = "D"
+
+        note = ""
+        if choice == "R":
+            note = _tty_prompt("    Resolution note (one line): ").strip() or "resolved by dev"
+            action_status = "resolved"
+        elif choice == "I":
+            action_status = "ignored"
+        else:
+            action_status = "deferred"
+            overall_deferred = True
+
+        # Record in the index
+        try:
+            record_action(smm_dir, title, existing, action_status, note=note, actor="dev")
+        except Exception as _e:
+            _tty_print(f"  [warn] index write failed: {_e}")
+
+        # Write to contradictions.jsonl (skip if ignored)
+        if action_status != "ignored":
+            try:
+                import uuid as _uuid
+                from datetime import datetime, timezone
+                entry = {
+                    "id": str(_uuid.uuid4()),
+                    "decision_a": title,
+                    "decision_b": existing,
+                    "explanation": f'"{title}" may contradict "{existing}"',
+                    "detected_at": datetime.now(timezone.utc).isoformat(),
+                    "resolved": action_status == "resolved",
+                    "status": action_status,
+                }
+                if note and action_status == "resolved":
+                    entry["resolution"] = note
+                    entry["resolved_at"] = entry["detected_at"]
+                smm_dir.mkdir(parents=True, exist_ok=True)
+                from smm_sync.jsonl_writer import append_jsonl_locked
+                if not append_jsonl_locked(smm_dir / "contradictions.jsonl", entry):
+                    _tty_print("  [warn] contradictions.jsonl write failed: lock timeout")
+            except Exception as _e:
+                _tty_print(f"  [warn] contradictions.jsonl write failed: {_e}")
+
+        # Write to pending_decisions.json if deferred
+        if action_status == "deferred":
+            try:
+                import uuid as _uuid
+                from datetime import datetime, timezone
+                pd_path = smm_dir / "pending_decisions.json"
+                pd: dict = {"items": []}
+                if pd_path.exists():
+                    try:
+                        pd = _json.loads(pd_path.read_text(encoding="utf-8"))
+                    except Exception:
+                        pd = {"items": []}
+                pd.setdefault("items", []).append({
+                    "id": str(_uuid.uuid4()),
+                    "type": "contradiction",
+                    "decision_a": title,
+                    "decision_b": existing,
+                    "deferred_at": datetime.now(timezone.utc).isoformat(),
+                })
+                pd_path.write_text(_json.dumps(pd, indent=2), encoding="utf-8")
+            except Exception as _e:
+                _tty_print(f"  [warn] pending_decisions.json write failed: {_e}")
+
+        # User feedback
+        label = {"resolved": "✓ Resolved", "deferred": "→ Deferred to PM", "ignored": "— Ignored"}
+        _tty_print(f"    {label.get(action_status, action_status)}")
+        _tty_print("")
+
+    # Write compliance audit entry
+    try:
+        import uuid as _uuid_audit
+        import json as _json_audit
+        from datetime import datetime, timezone
+        # Read agent from config.json, fallback to "cli"
+        _audit_agent = "cli"
+        _cfg_path = smm_dir / "config.json"
+        if _cfg_path.exists():
+            try:
+                _cfg_data = _json_audit.loads(_cfg_path.read_text(encoding="utf-8"))
+                _audit_agent = _cfg_data.get("agent", "cli") or "cli"
+                if _audit_agent in ("skip", None):
+                    _audit_agent = "cli"
+            except Exception:
+                pass
+        _surfaced = [title]
+        for c in contradictions:
+            _existing = c.get("existing", "")
+            if _existing and _existing not in _surfaced:
+                _surfaced.append(_existing)
+        _audit_entry = {
+            "event_type": "contradiction_handled",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "decision_title": title,
+            "agent": _audit_agent,
+            "actor": _audit_agent,
+            "session_id": _audit_agent,
+            "decisions_surfaced": _surfaced,
+            "decision_count": len(_surfaced),
+        }
+        smm_dir.mkdir(parents=True, exist_ok=True)
+        _lineage_path = smm_dir / "compliance_lineage.jsonl"
+        try:
+            from smm_sync.jsonl_writer import _write_audit_hashed as _wah
+            _wah(_lineage_path, _audit_entry)
+        except Exception:
+            with open(_lineage_path, "a", encoding="utf-8") as _lf:
+                _lf.write(_json_audit.dumps(_audit_entry) + "\n")
+    except Exception:
+        pass  # never block on audit write failure
+
+    # Output overall status to stdout for the shell
+    click.echo("deferred" if overall_deferred else "approved")
+
+
+@main.command("record-contradiction-action")
+@click.option("--title-a", "title_a", required=True, help="First decision title.")
+@click.option("--title-b", "title_b", required=True, help="Second (conflicting) decision title.")
+@click.option(
+    "--status",
+    "action_status",
+    required=True,
+    type=click.Choice(["resolved", "deferred", "ignored"]),
+    help="Action taken.",
+)
+@click.option("--note", default="", help="Optional resolution note.")
+@click.option("--actor", default="dev", help="Who performed the action.")
+def record_contradiction_action_cmd(
+    title_a: str,
+    title_b: str,
+    action_status: str,
+    note: str,
+    actor: str,
+) -> None:
+    """Record an action on a contradiction pair in contradiction_index.json.
+
+    Updates the index so the pair is never re-flagged in future commits.
+    Called by handle-contradictions and the dashboard resolve endpoint.
+
+    Args:
+        title_a: First decision title.
+        title_b: Second decision title.
+        action_status: One of resolved, deferred, ignored.
+        note: Optional resolution note.
+        actor: Who performed the action.
+    """
+    from smm_sync.contradiction_index import record_action
+
+    smm_dir = get_smm_dir()
+    try:
+        record_action(smm_dir, title_a, title_b, action_status, note=note, actor=actor)
+        click.echo(
+            click.style(f"Recorded: {title_a!r} ↔ {title_b!r} → {action_status}", fg="green")
+        )
+    except Exception as exc:
+        click.echo(click.style(f"Failed to record action: {exc}", fg="red"), err=True)
+        sys.exit(1)
 
 
 @main.command("sync-from-git")
@@ -679,7 +1781,7 @@ def sync_from_git(project: str, dry_run: bool) -> None:
             ["git", "log", "--grep=Axiom-Decision", f"--pretty=format:{fmt}", "--date=iso-strict"],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=120,
         )
     except (FileNotFoundError, _sub.TimeoutExpired) as exc:
         click.echo(click.style(f"git log failed: {exc}", fg="red"), err=True)
@@ -1035,6 +2137,92 @@ def compliance_stats() -> None:
             click.echo(f"  {i}. {item['title'][:60]} (surfaced {item['count']} times)")
 
 
+@main.command("reset")
+@click.option(
+    "--confirm",
+    is_flag=True,
+    default=False,
+    help="Confirm that you want to wipe all project data.",
+)
+def reset_cmd(confirm: bool) -> None:
+    """Wipe all project data (graph, contradictions, compliance log, board).
+
+    Preserves config.json and other settings.
+    Requires --confirm flag to prevent accidental data loss.
+
+    Use this before re-running PRDs from scratch or cleaning test artifacts.
+
+    Example:
+        smm reset --confirm
+    """
+    import shutil as _shutil
+
+    if not confirm:
+        click.echo(
+            click.style(
+                "This will wipe all project data.\n"
+                "Pass --confirm to proceed.\n\n"
+                "Files that will be deleted:\n"
+                "  .smm/graph/          (knowledge graph)\n"
+                "  .smm/contradictions.jsonl\n"
+                "  .smm/contradiction_index.json\n"
+                "  .smm/compliance_lineage.jsonl\n"
+                "  .smm/board.json\n"
+                "  .smm/pending_decisions.json\n\n"
+                "Files that will be preserved:\n"
+                "  .smm/config.json\n"
+                "  .smm/github.yml\n"
+                "  .smm/state.json\n"
+                "  AGENTS.md",
+                fg="yellow",
+            )
+        )
+        return
+
+    smm_dir = get_smm_dir()
+    if not smm_dir.exists():
+        click.echo(click.style("No .smm/ directory found. Nothing to reset.", fg="yellow"))
+        return
+
+    _TO_DELETE_DIRS = ["graph"]
+    _TO_DELETE_FILES = [
+        "contradictions.jsonl",
+        "contradiction_index.json",
+        "compliance_lineage.jsonl",
+        "board.json",
+        "pending_decisions.json",
+        "events.jsonl",
+    ]
+
+    deleted = []
+    for d in _TO_DELETE_DIRS:
+        p = smm_dir / d
+        if p.exists():
+            try:
+                _shutil.rmtree(p)
+                deleted.append(str(d) + "/")
+            except Exception as exc:
+                click.echo(click.style(f"  Could not delete {d}/: {exc}", fg="yellow"), err=True)
+
+    for f in _TO_DELETE_FILES:
+        p = smm_dir / f
+        if p.exists():
+            try:
+                p.unlink()
+                deleted.append(f)
+            except Exception as exc:
+                click.echo(click.style(f"  Could not delete {f}: {exc}", fg="yellow"), err=True)
+
+    if deleted:
+        click.echo(click.style("Reset complete. Deleted:", fg="green"))
+        for d in deleted:
+            click.echo(f"  .smm/{d}")
+    else:
+        click.echo(click.style("Nothing to delete (already clean).", fg="yellow"))
+
+    click.echo(click.style("\nRun `smm seed-graph` or add decisions to start fresh.", fg="cyan"))
+
+
 @main.command()
 @click.option("--host", default="127.0.0.1", help="Host to bind to.")
 @click.option("--port", default=0, help="Port (0 = auto-assign).")
@@ -1135,7 +2323,7 @@ async def _run_digest(period: str, slack_webhook: str | None, output_json: bool)
 
 @main.command()
 @click.option("--host", default="127.0.0.1", help="Host to bind to.")
-@click.option("--port", default=7842, help="Port to listen on (default: 7842).")
+@click.option("--port", default=DASHBOARD_PORT, help=f"Port to listen on (default: {DASHBOARD_PORT}).")
 def dashboard(host: str, port: int) -> None:
     """Start the CaaS Dashboard web UI.
 
@@ -1796,6 +2984,214 @@ def setup(project: str, skip_capture: bool, skip_onboarding: bool) -> None:
     else:
         click.echo("  3. Run `smm capture run` to keep decisions synced from GitHub")
     click.echo("  4. Run `smm serve` to start the MCP server")
+
+
+# ---------------------------------------------------------------------------
+# smm discover-edges
+# ---------------------------------------------------------------------------
+
+@main.command("discover-edges")
+@click.option("--project", default="smm-sync", show_default=True, help="Project name.")
+@click.option(
+    "--local",
+    "use_local",
+    is_flag=True,
+    default=False,
+    help="Use embedding-only approach (no claude CLI). Always offline.",
+)
+def discover_edges_cmd(project: str, use_local: bool) -> None:
+    """Discover and create edges between decisions.
+
+    Two modes:
+
+    \b
+    --local   Approach 1 — fully offline, zero API credits.
+              Uses the local all-MiniLM-L6-v2 sentence-transformers model to
+              compute pairwise cosine similarity. Pairs with similarity > 0.6
+              get an edge with an inferred type (SUPERSEDES, ENABLES, etc.).
+              Edge creation takes < 30s for 32 decisions.
+
+    \b
+    (default) Approach 2 — LLM-assisted via `claude -p` (Pro subscription
+              tokens, not API billing). Loads all decisions, pipes them to
+              `claude -p` for relationship analysis, then persists the JSON
+              response as edges. Falls back to Approach 1 if claude is not
+              available.
+
+    Both approaches are safe to run multiple times — edges are deduplicated.
+    """
+    import asyncio as _asyncio
+    import json as _json
+    import shutil
+    import subprocess
+
+    smm_dir = _get_smm_dir()
+    graph_dir = smm_dir / "graph"
+
+    if not graph_dir.exists():
+        click.echo(
+            click.style("  ✗  No graph found. Run `smm seed-graph` first.", fg="red")
+        )
+        raise SystemExit(1)
+
+    from smm_sync.context_graph.client import get_graph_client
+
+    async def _run_local():
+        gc = get_graph_client(graph_dir=graph_dir)
+        click.echo(f"  ⬡  Scanning decisions in project '{project}'...")
+        result = await gc.discover_edges(project=project)
+        return result
+
+    async def _run_llm():
+        """Approach 2: pipe decisions to `claude -p`, parse JSON edges."""
+        gc = get_graph_client(graph_dir=graph_dir)
+        await gc._get_graphiti()  # ensure schema initialised
+        await gc._ensure_decision_edge_table()
+
+        # Load all decisions
+        rows, _, _ = await gc._driver.execute_query(
+            "MATCH (e:Episodic) RETURN e.uuid, e.name, e.content "
+            "ORDER BY e.created_at ASC"
+        )
+        if not rows:
+            click.echo("  No decisions found.")
+            return {"nodes_scanned": 0, "edges_created": 0, "edges_skipped": 0}
+
+        uuids = [r.get("e.uuid", "") for r in rows]
+        titles = [r.get("e.name", "") or "(untitled)" for r in rows]
+        contents = [r.get("e.content", "") or "" for r in rows]
+
+        # Build numbered list for claude prompt
+        lines = []
+        for idx, (t, c) in enumerate(zip(titles, contents), 1):
+            rationale = ""
+            for line in c.splitlines():
+                if line.startswith("Rationale:"):
+                    rationale = line.split(":", 1)[1].strip()[:120]
+                    break
+            lines.append(f"{idx}. {t}" + (f" — {rationale}" if rationale else ""))
+
+        decisions_text = "\n".join(lines)
+        prompt = (
+            'Given these architectural decisions, output a JSON array of relationships. '
+            'Each relationship should have: '
+            '{"from": <number>, "to": <number>, "type": "SUPERSEDES|REQUIRES|ENABLES|CONTRADICTS|PREFERRED_OVER|RELATES_TO", "reason": "<short explanation>"}\n\n'
+            'Only output relationships where there is a clear logical connection.\n'
+            'Output ONLY valid JSON, no other text.\n\n'
+            f'Decisions:\n{decisions_text}'
+        )
+
+        click.echo(f"  ⬡  Sending {len(rows)} decisions to claude -p...")
+        try:
+            proc = subprocess.run(
+                ["claude", "-p", prompt],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            output = proc.stdout.strip()
+        except FileNotFoundError:
+            click.echo(
+                click.style("  ℹ  claude not found — falling back to local embeddings.", fg="yellow")
+            )
+            return await _run_local()
+        except subprocess.TimeoutExpired:
+            click.echo(
+                click.style("  ℹ  claude timed out — falling back to local embeddings.", fg="yellow")
+            )
+            return await _run_local()
+
+        # Parse JSON from claude output (strip markdown fences if present)
+        json_text = output
+        if "```" in json_text:
+            import re as _re
+            m = _re.search(r"```(?:json)?\s*([\s\S]+?)```", json_text)
+            if m:
+                json_text = m.group(1).strip()
+
+        try:
+            relationships = _json.loads(json_text)
+        except _json.JSONDecodeError:
+            click.echo(
+                click.style("  ✗  Could not parse JSON from claude output — falling back to local.", fg="yellow")
+            )
+            return await _run_local()
+
+        from datetime import datetime, timezone
+        now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        def _esc(s: str) -> str:
+            return (
+                s.replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\n", "\\n")
+                .replace("\r", "")
+            )
+
+        created = 0
+        skipped = 0
+        for rel in relationships:
+            try:
+                from_idx = int(rel["from"]) - 1
+                to_idx = int(rel["to"]) - 1
+                edge_type = str(rel.get("type", "RELATES_TO")).upper()
+                reason = str(rel.get("reason", ""))[:200]
+            except (KeyError, ValueError, TypeError):
+                skipped += 1
+                continue
+
+            if not (0 <= from_idx < len(uuids) and 0 <= to_idx < len(uuids)):
+                skipped += 1
+                continue
+
+            uuid_a = uuids[from_idx]
+            uuid_b = uuids[to_idx]
+            if not uuid_a or not uuid_b or uuid_a == uuid_b:
+                skipped += 1
+                continue
+
+            # Deduplicate
+            check_rows, _, _ = await gc._driver.execute_query(
+                "MATCH (a:Episodic)-[r:DecisionEdge]->(b:Episodic) "
+                f"WHERE (a.uuid = '{_esc(uuid_a)}' AND b.uuid = '{_esc(uuid_b)}') "
+                f"   OR (a.uuid = '{_esc(uuid_b)}' AND b.uuid = '{_esc(uuid_a)}') "
+                "RETURN count(r) AS cnt"
+            )
+            if check_rows and (check_rows[0].get("cnt") or 0) > 0:
+                skipped += 1
+                continue
+
+            edge_cypher = (
+                f"MATCH (a:Episodic {{uuid: '{_esc(uuid_a)}'}}), "
+                f"      (b:Episodic {{uuid: '{_esc(uuid_b)}'}}) "
+                "CREATE (a)-[:DecisionEdge {"
+                f"name: '{_esc(edge_type)}', "
+                f"edge_type: '{_esc(edge_type)}', "
+                f"reason: '{_esc(reason)}', "
+                f"weight: 0.8000, "
+                f"created_at: timestamp('{now_ts}')"
+                "}]->(b)"
+            )
+            async with gc._write_lock:
+                await gc._driver.execute_query(edge_cypher)
+            created += 1
+
+        return {"nodes_scanned": len(rows), "edges_created": created, "edges_skipped": skipped}
+
+    if use_local:
+        result = _asyncio.run(_run_local())
+    else:
+        result = _asyncio.run(_run_llm())
+
+    n = result.get("nodes_scanned", 0)
+    e = result.get("edges_created", 0)
+    s = result.get("edges_skipped", 0)
+    click.echo(
+        click.style(
+            f"  ✓  Created {e} edges between {n} decisions ({s} pairs below threshold).",
+            fg="green",
+        )
+    )
 
 
 # ---------------------------------------------------------------------------

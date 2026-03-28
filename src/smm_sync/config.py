@@ -1,7 +1,5 @@
 """Load and validate smm.toml using tomllib (Python 3.11+ stdlib).
 
-# adapted from axiom-hub/src/axiom/config.py (find_project_root pattern)
-
 Context graph configuration:
     GRAPH_DIR: Path to Kuzu graph database (.smm/graph/ relative to project root).
     GRAPH_PROJECT_DEFAULT: Default project name for graph partitioning.
@@ -17,6 +15,10 @@ from pathlib import Path
 # Context graph configuration — resolved at import time
 GRAPH_PROJECT_DEFAULT: str = "smm-sync"
 ANTHROPIC_API_KEY: str = os.environ.get("ANTHROPIC_API_KEY", "")
+
+# Dashboard configuration
+DEFAULT_DASHBOARD_PORT: int = 7842
+DASHBOARD_PORT: int = int(os.environ.get("SMM_DASHBOARD_PORT", DEFAULT_DASHBOARD_PORT))
 
 
 def get_graph_dir(start: Path | None = None) -> Path:

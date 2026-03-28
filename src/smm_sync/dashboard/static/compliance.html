@@ -3,12 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Compliance Audit Trail — CaaS</title>
+<title>AI Governance Audit Trail — CaaS</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⬡</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.0/index.min.css">
 <style>
   :root {
     --bg: #fafaf8; --surface: #ffffff; --surface-2: #f4f4f0;
@@ -19,60 +18,125 @@
     --amber: #d97706; --amber-light: #fffbeb; --amber-border: #fde68a;
     --red: #dc2626; --red-light: #fef2f2; --red-border: #fecaca;
     --purple: #7c3aed; --purple-light: #f5f3ff; --purple-border: #ddd6fe;
-    --surface-3: #eeede9;
-    --border-2: #d4d0ca;
-    --mono: 'JetBrains Mono', 'Fira Code', monospace;
+    --surface-3: #eeede9; --border-2: #d4d0ca;
     --serif: 'Instrument Serif', Georgia, serif;
     --sans: 'Geist', system-ui, sans-serif;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Geist', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; font-size: 14px; }
+  body { font-family: var(--sans); background: var(--bg); color: var(--text); min-height: 100vh; display: flex; font-size: 14px; }
+
+  /* ── Sidebar ── */
   .sidebar { width: 208px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: 50; }
-  .logo { padding: 20px 18px 16px; border-bottom: 1px solid var(--border); }
-  .logo-wordmark { font-family: var(--serif); font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 8px; letter-spacing: -0.5px; }
-  .logo-icon { width: 28px; height: 28px; background: var(--accent); border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 13px; color: white; font-weight: 700; }
-  .logo-sub { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
   .nav { flex: 1; padding: 10px 8px; overflow-y: auto; }
   .nav-section { margin-bottom: 16px; }
   .nav-label { font-size: 10px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; color: var(--text-dim); padding: 0 10px; margin-bottom: 3px; }
-  .nav-item { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 7px; cursor: pointer; font-size: 13px; color: var(--text-muted); transition: all 0.12s; }
+  .nav-item { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 7px; cursor: pointer; font-size: 13px; color: var(--text-muted); transition: all 0.12s; text-decoration: none; }
   .nav-item:hover { background: var(--surface-2); color: var(--text); }
   .nav-item.active { color: var(--accent); font-weight: 500; background: transparent; border-left: 2px solid var(--accent); border-radius: 0 6px 6px 0; padding-left: 7px; }
   .nav-icon { font-size: 14px; width: 18px; text-align: center; }
   .nav-badge { margin-left: auto; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 10px; background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); }
+  .nav-badge.warn { background: var(--amber-light); color: var(--amber); border-color: var(--amber-border); }
   .nav-badge.blue { background: var(--accent-light); color: var(--accent); border-color: var(--accent-border); }
   .nav-soon { margin-left: auto; font-size: 9px; padding: 1px 5px; border-radius: 4px; background: var(--surface-2); color: var(--text-dim); }
   .sidebar-footer { padding: 12px; border-top: 1px solid var(--border); }
+
+  /* ── Main ── */
   .main { margin-left: 208px; flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
   .topbar { height: 48px; border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 24px; gap: 10px; background: var(--surface); position: sticky; top: 0; z-index: 40; }
   .topbar-title { font-family: var(--serif); font-size: 15px; font-weight: 600; flex: 1; }
-  .btn { padding: 7px 14px; border-radius: 7px; font-size: 12px; font-family: 'Geist', sans-serif; font-weight: 500; cursor: pointer; border: none; transition: all 0.12s; display: inline-flex; align-items: center; gap: 5px; text-decoration: none; }
+  .btn { padding: 6px 12px; border-radius: 6px; font-size: 12px; font-family: var(--sans); font-weight: 500; cursor: pointer; border: none; transition: all 0.12s; display: inline-flex; align-items: center; gap: 5px; text-decoration: none; }
   .btn-primary { background: var(--accent); color: white; }
+  .btn-primary:hover { background: #1d4ed8; }
   .btn-outline { background: transparent; color: var(--text-mid); border: 1px solid var(--border-dark); }
   .btn-outline:hover { background: var(--surface-2); }
   .btn-ghost { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
   .btn-ghost:hover { color: var(--text); border-color: var(--border-dark); }
-  .content { flex: 1; padding: 20px 24px; overflow-y: auto; }
+
+  /* ── Content ── */
+  .content { flex: 1; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
+
+  /* ── Summary cards ── */
+  .summary-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .summary-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+  .sc-label { font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text-dim); margin-bottom: 6px; }
+  .sc-value { font-family: var(--serif); font-size: 28px; font-weight: 600; line-height: 1; color: var(--text); margin-bottom: 4px; }
+  .sc-value.red { color: var(--red); }
+  .sc-meta { font-size: 11px; color: var(--text-dim); display: flex; align-items: center; gap: 4px; }
+  .sc-trend-up   { color: var(--green); font-size: 11px; }
+  .sc-trend-down { color: var(--red);   font-size: 11px; }
+  .sc-trend-flat { color: var(--text-dim); font-size: 11px; }
+
+  /* ── Panel ── */
   .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
-  .panel-header { padding: 11px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-  .panel-title { font-family: var(--serif); font-size: 13px; font-weight: 600; }
-  .panel-actions { display: flex; gap: 6px; align-items: center; }
-  .panel-count { font-size: 11px; color: var(--text-dim); background: var(--surface-2); padding: 2px 7px; border-radius: 20px; border: 1px solid var(--border); }
-  .filter-bar { display: flex; gap: 8px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--surface-2); flex-wrap: wrap; }
-  .filter-input { padding: 5px 10px; border: 1px solid var(--border-dark); border-radius: 6px; font-size: 12px; font-family: 'Geist', sans-serif; background: var(--surface); color: var(--text); outline: none; }
-  .filter-input:focus { border-color: var(--accent); }
-  .log-row { display: grid; grid-template-columns: 140px 1fr 70px auto; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: 11px; transition: background 0.1s; }
-  .log-row:last-child { border-bottom: none; }
-  .log-row:hover { background: var(--surface-2); }
-  .log-time { color: var(--text-dim); font-family: monospace; font-size: 10px; }
-  .log-desc { color: var(--text-muted); }
-  .log-desc strong { color: var(--text); font-weight: 500; }
-  .log-agent { font-size: 10px; color: var(--text-dim); }
-  .log-count { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 20px; background: var(--accent-light); color: var(--accent); border: 1px solid var(--accent-border); white-space: nowrap; }
+  .panel-header { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .panel-title { font-family: var(--serif); font-size: 14px; font-weight: 600; }
+
+  /* ── Date filter bar ── */
+  .filter-bar { display: flex; align-items: center; gap: 6px; padding: 9px 16px; border-bottom: 1px solid var(--border); background: var(--surface-2); flex-wrap: wrap; }
+  .quick-btn { padding: 4px 10px; border-radius: 5px; border: 1px solid var(--border-dark); background: var(--surface); color: var(--text-muted); font-size: 11px; font-family: var(--sans); cursor: pointer; transition: all 0.1s; }
+  .quick-btn:hover { background: var(--surface-3); color: var(--text); }
+  .quick-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+  .date-sep { color: var(--text-dim); font-size: 11px; margin: 0 2px; }
+  .date-input { padding: 4px 8px; border: 1px solid var(--border-dark); border-radius: 5px; font-size: 11px; font-family: var(--sans); background: var(--surface); color: var(--text); outline: none; }
+  .date-input:focus { border-color: var(--accent); }
+  .filter-spacer { flex: 1; }
+  .showing-badge { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+
+  /* ── Ledger table ── */
+  .ledger-table { width: 100%; }
+  .ledger-head { display: grid; grid-template-columns: 130px 90px 1fr 110px 65px 96px 96px; gap: 8px; padding: 7px 16px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+  .ledger-head-cell { font-size: 10px; font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase; color: var(--text-dim); }
+  .ledger-row { border-bottom: 1px solid var(--border); cursor: pointer; }
+  .ledger-row:last-child { border-bottom: none; }
+  .ledger-row-main { display: grid; grid-template-columns: 130px 90px 1fr 110px 65px 96px 96px; gap: 8px; padding: 10px 16px; align-items: start; transition: background 0.1s; }
+  .ledger-row:hover .ledger-row-main { background: var(--surface-2); }
+  .ledger-row.expanded .ledger-row-main { background: var(--accent-light); border-bottom: 1px solid var(--accent-border); }
+  .ledger-time { color: var(--text-dim); font-family: 'Courier New', monospace; font-size: 10px; padding-top: 2px; line-height: 1.5; display: flex; align-items: flex-start; gap: 3px; }
+  .hash-shield { font-size: 9px; opacity: 0.5; cursor: help; flex-shrink: 0; margin-top: 1px; }
+  .ledger-status { padding-top: 1px; overflow: hidden; }
+  .ledger-desc { color: var(--text-mid); font-size: 12px; line-height: 1.5; padding-left: 16px; }
+  .ledger-desc .hi { color: var(--text); font-weight: 500; }
+  .ledger-model { color: var(--text-dim); font-size: 10px; padding-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: 'Courier New', monospace; }
+  .ledger-conf { font-size: 11px; padding-top: 2px; font-weight: 500; }
+  .ledger-actor { color: var(--text-dim); font-size: 11px; padding-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ledger-reviewer { color: var(--text-dim); font-size: 11px; padding-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ── Status badges ── */
+  .status-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 4px; white-space: nowrap; }
+  .sb-added    { background: var(--accent-light); color: var(--accent);  border: 1px solid var(--accent-border); }
+  .sb-conflict { background: var(--amber-light);  color: var(--amber);   border: 1px solid var(--amber-border); }
+  .sb-resolved { background: var(--green-light);  color: var(--green);   border: 1px solid var(--green-border); }
+  .sb-dismissed{ background: var(--surface-2);    color: var(--text-muted); border: 1px solid var(--border-dark); }
+  .sb-context  { background: var(--purple-light); color: var(--purple);  border: 1px solid var(--purple-border); }
+  .status-dot  { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .dot-added    { background: var(--accent); }
+  .dot-conflict { background: var(--amber); }
+  .dot-resolved { background: var(--green); }
+  .dot-dismissed{ background: var(--text-dim); }
+  .dot-context  { background: var(--purple); }
+
+  /* ── Row expansion ── */
+  .ledger-expand { display: none; padding: 12px 16px 14px 248px; background: var(--accent-light); border-top: 1px dashed var(--accent-border); }
+  .ledger-row.expanded .ledger-expand { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .expand-section { }
+  .expand-label { font-size: 10px; font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase; color: var(--accent); margin-bottom: 4px; }
+  .expand-value { font-size: 12px; color: var(--text-mid); line-height: 1.5; }
+  .expand-value.mono { font-family: 'Courier New', monospace; font-size: 11px; }
+  .expand-value.rationale { color: var(--text); max-width: 620px; }
+  .conf-chip { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; background: var(--surface); border: 1px solid var(--border-dark); }
+  .conf-high { background: var(--green-light); color: var(--green); border-color: var(--green-border); }
+  .conf-med  { background: var(--amber-light); color: var(--amber); border-color: var(--amber-border); }
+  .conf-low  { background: var(--red-light);   color: var(--red);   border-color: var(--red-border); }
+  .type-chip { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); }
+
+  /* ── Load more / empty ── */
   .load-more { padding: 12px; text-align: center; border-top: 1px solid var(--border); }
   .empty-state { text-align: center; padding: 40px 20px; color: var(--text-dim); }
-  .empty-icon { font-size: 36px; margin-bottom: 10px; opacity: 0.4; }
-  .empty-title { font-family: var(--serif); font-size: 16px; font-weight: 600; color: var(--text-muted); margin-bottom: 5px; }
+  .empty-icon { font-size: 32px; margin-bottom: 8px; opacity: 0.4; }
+  .empty-title { font-family: var(--serif); font-size: 16px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; }
+  .empty-desc { font-size: 12px; }
+
+  /* ── Toast ── */
   .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--text); color: white; padding: 10px 18px; border-radius: 8px; font-size: 12px; opacity: 0; transition: all 0.3s; z-index: 1000; pointer-events: none; }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: var(--border-dark); border-radius: 10px; }
@@ -82,9 +146,9 @@
 <div class="toast" id="toast"></div>
 
 <aside class="sidebar">
-  <div class="logo" style="padding:16px 14px 12px;border-bottom:1px solid var(--border)">
-    <div class="logo-wordmark" style="font-family:var(--serif);font-size:19px;font-weight:600;display:flex;align-items:center;gap:8px;letter-spacing:-0.3px">
-      <div class="logo-icon" style="width:26px;height:26px;background:var(--accent);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;color:white;font-weight:700;flex-shrink:0">C</div>
+  <div style="padding:16px 14px 12px;border-bottom:1px solid var(--border)">
+    <div style="font-family:var(--serif);font-size:19px;font-weight:600;display:flex;align-items:center;gap:8px;letter-spacing:-0.3px">
+      <div style="width:26px;height:26px;background:var(--accent);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;color:white;font-weight:700;flex-shrink:0">C</div>
       CaaS
     </div>
     <div style="font-size:11px;color:var(--text-dim);margin-top:2px;padding-left:34px">context-as-a-service</div>
@@ -96,23 +160,23 @@
   <nav class="nav">
     <div class="nav-section">
       <div class="nav-label">OVERVIEW</div>
-      <a class="nav-item" href="/" style="text-decoration:none"><span class="nav-icon">◈</span><span>Dashboard</span></a>
+      <a class="nav-item" href="/"><span class="nav-icon">◈</span><span>Dashboard</span></a>
     </div>
     <div class="nav-section">
       <div class="nav-label">KNOWLEDGE</div>
-      <a class="nav-item" href="/decisions" style="text-decoration:none"><span class="nav-icon">◇</span><span>All Decisions</span><span class="nav-badge" id="sb-decisions-badge">—</span></a>
-      <a class="nav-item" href="/graph" style="text-decoration:none"><span class="nav-icon">⬡</span><span>Decision Graph</span></a>
-      <a class="nav-item" href="/board" style="text-decoration:none"><span class="nav-icon">⊞</span><span>Decision Board</span><span class="nav-badge" id="sb-board-badge">—</span></a>
-      <a class="nav-item" href="/timeline" style="text-decoration:none"><span class="nav-icon">⏱</span><span>Time-Travel</span></a>
+      <a class="nav-item" href="/decisions"><span class="nav-icon">◇</span><span>All Decisions</span><span class="nav-badge" id="sb-decisions-badge">—</span></a>
+      <a class="nav-item" href="/graph"><span class="nav-icon">⬡</span><span>Decision Graph</span></a>
+      <a class="nav-item" href="/board"><span class="nav-icon">⊞</span><span>Decision Board</span><span class="nav-badge" id="sb-board-badge">—</span></a>
+      <a class="nav-item" href="/timeline"><span class="nav-icon">⏱</span><span>Time-Travel</span></a>
     </div>
     <div class="nav-section">
       <div class="nav-label">COMPLIANCE</div>
-      <a class="nav-item active" href="/compliance" style="text-decoration:none"><span class="nav-icon">⊟</span><span>Audit Trail</span><span class="nav-badge" id="sb-compliance-badge">—</span></a>
+      <a class="nav-item active" href="/compliance"><span class="nav-icon">⊟</span><span>Audit Trail</span><span class="nav-badge" id="sb-compliance-badge">—</span></a>
     </div>
     <div class="nav-section">
       <div class="nav-label">CAPTURE</div>
-      <a class="nav-item" href="#" style="text-decoration:none"><span class="nav-icon">⑂</span><span>GitHub</span><span class="nav-badge blue" id="sb-github-badge">—</span></a>
-      <a class="nav-item" href="#" style="text-decoration:none"><span class="nav-icon">#</span><span>Slack</span><span class="nav-soon">soon</span></a>
+      <span class="nav-item" style="cursor:default;opacity:0.55"><span class="nav-icon">⑂</span><span>GitHub</span><span class="nav-soon">soon</span></span>
+      <span class="nav-item" style="cursor:default;opacity:0.55"><span class="nav-icon">#</span><span>Slack</span><span class="nav-soon">soon</span></span>
     </div>
   </nav>
   <div class="sidebar-footer">
@@ -129,72 +193,504 @@
 
 <main class="main">
   <div class="topbar">
-    <div class="topbar-title">Compliance Audit Trail</div>
+    <div class="topbar-title">⊟ AI Governance Audit Trail</div>
     <a href="/" class="btn btn-ghost">← Dashboard</a>
-    <button class="btn btn-outline" onclick="exportPDF()">↓ PDF</button>
+    <button class="btn btn-ghost" id="verify-btn" onclick="verifyIntegrity()" title="Verify SHA-256 hash chain">🛡 Verify Integrity</button>
+    <span id="last-verified" style="font-size:10px;color:var(--text-dim);margin-left:-4px"></span>
+    <button class="btn btn-outline" onclick="exportCSV()">↓ Export CSV</button>
+    <button class="btn btn-primary" onclick="exportPDF()">↓ Export PDF</button>
   </div>
+
   <div class="content">
-    <div class="panel">
-      <div class="panel-header">
-        <span class="panel-title">Context Injection Log</span>
-        <div class="panel-actions">
-          <span class="panel-count" id="count-badge">loading...</span>
+
+    <!-- Integrity verification banner -->
+    <div id="verify-banner" style="display:none;padding:10px 16px;border-radius:8px;font-size:12px;font-weight:500;display:none;align-items:center;gap:8px"></div>
+
+    <!-- Summary cards -->
+    <div class="summary-cards">
+      <div class="summary-card">
+        <div class="sc-label">Decisions Captured</div>
+        <div class="sc-value" id="sc-decisions">—</div>
+        <div class="sc-meta">
+          <span id="sc-decisions-trend"></span>
+          <span id="sc-decisions-meta" style="color:var(--text-dim)">in selected period</span>
         </div>
       </div>
+      <div class="summary-card">
+        <div class="sc-label">Pending Reviews</div>
+        <div class="sc-value" id="sc-pending">—</div>
+        <div class="sc-meta" id="sc-pending-meta" style="color:var(--text-dim)">unresolved conflicts</div>
+      </div>
+      <div class="summary-card">
+        <div class="sc-label">Resolved</div>
+        <div class="sc-value" id="sc-resolved">—</div>
+        <div class="sc-meta" id="sc-resolved-meta" style="color:var(--text-dim)">contradictions resolved</div>
+      </div>
+      <div class="summary-card">
+        <div class="sc-label">Human Oversight</div>
+        <div class="sc-value" id="sc-oversight">—</div>
+        <div class="sc-meta" style="color:var(--text-dim)">of conflicts reviewed</div>
+      </div>
+    </div>
+
+    <!-- Master Audit Ledger -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Master Audit Ledger</span>
+        <span style="font-size:11px;color:var(--text-dim)" id="count-badge">loading…</span>
+        <span style="flex:1"></span>
+        <span class="showing-badge" id="showing-badge">—</span>
+      </div>
+
+      <!-- Date range filter -->
       <div class="filter-bar">
-        <input class="filter-input" id="agent-filter" placeholder="Filter by agent..." oninput="renderEntries()" style="width:160px" />
-        <span style="font-size:11px;color:var(--text-dim);margin-left:auto" id="showing-badge">showing —</span>
+        <button class="quick-btn" id="qb-today"  onclick="setRange('today', this)">Today</button>
+        <button class="quick-btn active" id="qb-7d" onclick="setRange('7d', this)">Last 7d</button>
+        <button class="quick-btn" id="qb-30d"  onclick="setRange('30d', this)">Last 30d</button>
+        <button class="quick-btn" id="qb-all"  onclick="setRange('all', this)">All time</button>
+        <span class="date-sep">·</span>
+        <input type="date" class="date-input" id="from-date" onchange="applyCustomRange()" />
+        <span class="date-sep">→</span>
+        <input type="date" class="date-input" id="to-date"   onchange="applyCustomRange()" />
+        <span class="filter-spacer"></span>
       </div>
-      <div id="entries-list">
-        <div class="empty-state"><div class="empty-icon">⊟</div><div class="empty-title">Loading compliance log...</div></div>
+
+      <!-- Column headers -->
+      <div class="ledger-head">
+        <div class="ledger-head-cell">Timestamp</div>
+        <div class="ledger-head-cell">Status</div>
+        <div class="ledger-head-cell">Description</div>
+        <div class="ledger-head-cell">Model</div>
+        <div class="ledger-head-cell">Conf</div>
+        <div class="ledger-head-cell">Actor</div>
+        <div class="ledger-head-cell">Reviewer</div>
       </div>
+
+      <!-- Rows -->
+      <div class="ledger-table" id="entries-list">
+        <div class="empty-state">
+          <div class="empty-icon">⊟</div>
+          <div class="empty-title">Loading…</div>
+        </div>
+      </div>
+
       <div class="load-more" id="load-more-wrap" style="display:none">
         <button class="btn btn-outline" onclick="loadMore()">Load 50 more</button>
       </div>
     </div>
+
   </div>
 </main>
 
 <script>
 let allEntries = [];
 let visibleCount = 50;
+let currentFrom = '';
+let currentTo   = '';
 
+/* ── Utilities ── */
 function showToast(msg) {
-  const t = document.getElementById('toast'); t.textContent = msg;
-  t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2800);
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2800);
+}
+function escHtml(v) {
+  return String(v || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function isoDate(d) { return d.toISOString().slice(0, 10); }
+function confDisplay(c) {
+  const n = (c > 1 ? c : c * 100);
+  return Math.round(n) + '%';
+}
+function confClass(c) {
+  const n = c > 1 ? c : c * 100;
+  return n >= 80 ? 'conf-high' : n >= 60 ? 'conf-med' : 'conf-low';
 }
 
-function formatTimestamp(ts) {
-  if (!ts) return '—';
-  return ts.replace('T', ' ').slice(0, 19) + ' UTC';
+/* ── Model display ── */
+function modelDisplay(e) {
+  const raw = (e.made_by || e.agent || e.actor || e.source || '').toLowerCase().trim();
+  if (!raw || raw === '—') return '—';
+  if (raw === 'claude-code' || raw === 'lore-hook' || raw === 'claude') return 'claude-sonnet-4-6';
+  if (raw.includes('cursor')) return 'cursor-agent';
+  if (raw === 'dashboard' || raw === 'manual-review') return 'manual-review';
+  if (raw === 'manual' || raw === 'human') return 'manual-review';
+  return raw.slice(0, 16);
 }
 
-function renderEntries() {
-  const agentFilter = document.getElementById('agent-filter').value.toLowerCase();
-  let filtered = allEntries;
-  if (agentFilter) {
-    filtered = allEntries.filter(e => (e.agent || '').toLowerCase().includes(agentFilter));
+/* ── Confidence column ── */
+function confColumn(e) {
+  const et = e.event_type || '';
+  if (et !== 'decision_recorded' && et !== 'decision_added') return '<span style="color:var(--text-dim)">—</span>';
+  const c = parseFloat(e.confidence || 0);
+  if (!c) return '<span style="color:var(--text-dim)">—</span>';
+  return `<span class="conf-chip ${confClass(c)}">${confDisplay(c)}</span>`;
+}
+
+/* ── Contradiction dedup key ── */
+function contradictionKey(e) {
+  if (e.contradiction_id) return e.contradiction_id;
+  return (e.entry_id || '').replace(/-(detected|resolved|dismissed)$/, '') || e.entry_id || '';
+}
+
+/* ── Status badge ── */
+function statusBadge(et) {
+  if (et === 'decision_recorded' || et === 'decision_added') return '<span class="status-badge sb-added"><span class="status-dot dot-added"></span>Added</span>';
+  if (et === 'contradiction_detected') return '<span class="status-badge sb-conflict"><span class="status-dot dot-conflict"></span>Conflict</span>';
+  if (et === 'contradiction_resolved') return '<span class="status-badge sb-resolved"><span class="status-dot dot-resolved"></span>Resolved</span>';
+  if (et === 'contradiction_dismissed') return '<span class="status-badge sb-dismissed"><span class="status-dot dot-dismissed"></span>Dismissed</span>';
+  if (et === 'context_injection')    return '<span class="status-badge sb-context"><span class="status-dot dot-context"></span>Context</span>';
+  return '<span class="status-badge sb-dismissed"><span class="status-dot dot-dismissed"></span>' + escHtml(et) + '</span>';
+}
+
+/* ── Entry description ── */
+function describeEntry(e) {
+  const et = e.event_type || '';
+  const title = escHtml((e.decision_title || e.title || '').slice(0, 80));
+
+  if (et === 'decision_recorded' || et === 'decision_added') {
+    return title ? `Added: <span class="hi">"${title}"</span>` : `Added: <span style="color:var(--text-dim)">(untitled decision)</span>`;
   }
+  if (et === 'contradiction_detected') {
+    return `Contradiction detected: <span class="hi">${escHtml((e.explanation || title || 'unknown conflict').slice(0, 80))}</span>`;
+  }
+  if (et === 'contradiction_resolved') {
+    const winner = escHtml((e.winner || e.decision_title || '').slice(0, 60));
+    return `Contradiction resolved${winner ? ': kept <span class="hi">"' + winner + '"</span>' : ''}`;
+  }
+  if (et === 'contradiction_dismissed') {
+    return `Contradiction dismissed: <span class="hi">${escHtml((e.ignore_reason || title || 'no reason given').slice(0, 80))}</span>`;
+  }
+  if (et === 'decision_superseded') {
+    // decision_title is pre-built by server as "Superseded: [title] → [winner]"
+    if (e.decision_title) {
+      return escHtml(e.decision_title.slice(0, 100));
+    }
+    // Fallback: build from UUIDs if title not enriched
+    const supTitle = escHtml((e.superseded_title || '').slice(0, 60));
+    const winTitle = escHtml((e.superseded_by_title || '').slice(0, 60));
+    if (supTitle) return `Superseded: <span class="hi">"${supTitle}"</span>` + (winTitle ? ` → <span class="hi">"${winTitle}"</span>` : '');
+    return `Superseded decision`;
+  }
+  if (et === 'context_injection') {
+    const count = e.decision_count || 0;
+    const agent = escHtml(e.agent || 'agent');
+    return `Context injected: <span class="hi">${count} decision${count !== 1 ? 's' : ''}</span> surfaced to <span class="hi">${agent}</span>`;
+  }
+  // Raw event type — humanise it rather than show the snake_case key
+  return `<span style="color:var(--text-dim)">${escHtml(et.replace(/_/g, ' '))}</span>`;
+}
+
+/* ── Expanded details ── */
+function expandDetails(e) {
+  const et = e.event_type || '';
+  const parts = [];
+
+  if (et === 'decision_recorded' || et === 'decision_added') {
+    const rat = (e.rationale || '').trim();
+    const conf = parseFloat(e.confidence || 0);
+    const dtype = (e.decision_type || '').toLowerCase();
+    const alts = (e.alternatives || '').trim();
+    const constr = (e.constraints || '').trim();
+
+    if (rat) {
+      parts.push(`<div class="expand-section" style="grid-column:1/-1">
+        <div class="expand-label">Rationale</div>
+        <div class="expand-value rationale">${escHtml(rat)}</div>
+      </div>`);
+    }
+    if (alts) {
+      parts.push(`<div class="expand-section">
+        <div class="expand-label">Alternatives Considered</div>
+        <div class="expand-value">${escHtml(alts)}</div>
+      </div>`);
+    }
+    if (constr) {
+      parts.push(`<div class="expand-section">
+        <div class="expand-label">Constraints</div>
+        <div class="expand-value">${escHtml(constr)}</div>
+      </div>`);
+    }
+    const meta = [];
+    if (conf) meta.push(`<div class="expand-section">
+      <div class="expand-label">Confidence</div>
+      <div class="expand-value"><span class="conf-chip ${confClass(conf)}">${confDisplay(conf)}</span></div>
+    </div>`);
+    if (dtype) meta.push(`<div class="expand-section">
+      <div class="expand-label">Decision Type</div>
+      <div class="expand-value"><span class="type-chip">${escHtml(dtype)}</span></div>
+    </div>`);
+    if (e.decision_uuid) meta.push(`<div class="expand-section">
+      <div class="expand-label">UUID</div>
+      <div class="expand-value mono">${escHtml(e.decision_uuid)}</div>
+    </div>`);
+    if (e.content_hash) meta.push(`<div class="expand-section">
+      <div class="expand-label">Forensic ID 🛡</div>
+      <div class="expand-value mono" title="${escHtml(e.content_hash)}">${escHtml(e.content_hash.slice(0, 8))}</div>
+    </div>`);
+    if (meta.length) {
+      parts.push(`<div style="grid-column:1/-1;display:grid;grid-template-columns:repeat(4,auto);gap:16px;align-items:start">${meta.join('')}</div>`);
+    }
+    // Source context (EU AI Act Art 12)
+    const ctxSource = e.context_source || (e.context && e.context.source) || '';
+    const ctxRef = e.context_git_ref || (e.context && e.context.git_ref) || '';
+    const ctxBranch = e.context && e.context.branch ? e.context.branch : '';
+    if (ctxSource || ctxRef || ctxBranch) {
+      const ctxItems = [];
+      if (ctxSource) ctxItems.push(`<div class="expand-section"><div class="expand-label">Source</div><div class="expand-value">${escHtml(ctxSource)}</div></div>`);
+      if (ctxRef) ctxItems.push(`<div class="expand-section"><div class="expand-label">Git ref</div><div class="expand-value mono">${escHtml(ctxRef)}</div></div>`);
+      if (ctxBranch) ctxItems.push(`<div class="expand-section"><div class="expand-label">Branch</div><div class="expand-value mono">${escHtml(ctxBranch)}</div></div>`);
+      parts.push(`<div class="expand-section" style="grid-column:1/-1">
+        <div class="expand-label">Source Context</div>
+        <div style="display:grid;grid-template-columns:repeat(3,auto);gap:12px;align-items:start;margin-top:4px">${ctxItems.join('')}</div>
+      </div>`);
+    }
+  }
+
+  if (et === 'contradiction_detected') {
+    if (e.explanation) parts.push(`<div class="expand-section" style="grid-column:1/-1">
+      <div class="expand-label">Explanation</div>
+      <div class="expand-value rationale">${escHtml(e.explanation)}</div>
+    </div>`);
+    if (e.decision_a || e.decision_b) {
+      parts.push(`<div class="expand-section">
+        <div class="expand-label">Decision A</div>
+        <div class="expand-value">${escHtml(e.decision_a || '—')}</div>
+      </div>
+      <div class="expand-section">
+        <div class="expand-label">Decision B</div>
+        <div class="expand-value">${escHtml(e.decision_b || '—')}</div>
+      </div>`);
+    }
+  }
+
+  if (et === 'contradiction_resolved') {
+    if (e.winner) parts.push(`<div class="expand-section">
+      <div class="expand-label">Kept Decision</div>
+      <div class="expand-value"><span class="hi">${escHtml(e.winner)}</span></div>
+    </div>`);
+    if (e.rationale) parts.push(`<div class="expand-section">
+      <div class="expand-label">Resolution Rationale</div>
+      <div class="expand-value rationale">${escHtml(e.rationale)}</div>
+    </div>`);
+    if (e.reviewer) parts.push(`<div class="expand-section">
+      <div class="expand-label">Reviewed By</div>
+      <div class="expand-value">${escHtml(e.reviewer)}</div>
+    </div>`);
+  }
+
+  if (et === 'decision_superseded') {
+    if (e.decision_title) parts.push(`<div class="expand-section" style="grid-column:1/-1">
+      <div class="expand-label">Summary</div>
+      <div class="expand-value">${escHtml(e.decision_title)}</div>
+    </div>`);
+    if (e.superseded_uuid) parts.push(`<div class="expand-section">
+      <div class="expand-label">Superseded UUID</div>
+      <div class="expand-value mono">${escHtml(e.superseded_uuid.slice(0, 8))}…</div>
+    </div>`);
+    if (e.superseded_by_uuid) parts.push(`<div class="expand-section">
+      <div class="expand-label">Replaced by UUID</div>
+      <div class="expand-value mono">${escHtml(e.superseded_by_uuid.slice(0, 8))}…</div>
+    </div>`);
+    if (e.reviewer) parts.push(`<div class="expand-section">
+      <div class="expand-label">Approved By</div>
+      <div class="expand-value">${escHtml(e.reviewer)}</div>
+    </div>`);
+  }
+
+  if (et === 'contradiction_dismissed') {
+    if (e.ignore_reason) parts.push(`<div class="expand-section" style="grid-column:1/-1">
+      <div class="expand-label">Reason</div>
+      <div class="expand-value rationale">${escHtml(e.ignore_reason)}</div>
+    </div>`);
+    if (e.reviewer) parts.push(`<div class="expand-section">
+      <div class="expand-label">Dismissed By</div>
+      <div class="expand-value">${escHtml(e.reviewer)}</div>
+    </div>`);
+  }
+
+  /* Forensic ID (hash) — shown for all event types when present */
+  if (e.content_hash && et !== 'decision_recorded' && et !== 'decision_added') {
+    parts.push(`<div class="expand-section" style="grid-column:1/-1;border-top:1px dashed var(--accent-border);padding-top:8px;margin-top:4px">
+      <div class="expand-label">Forensic ID 🛡</div>
+      <div class="expand-value mono" title="Full hash: ${escHtml(e.content_hash)}">${escHtml(e.content_hash.slice(0, 8))} <span style="color:var(--text-dim);font-size:10px">· prev: ${escHtml((e.prev_hash || 'GENESIS').slice(0, 8))}</span></div>
+    </div>`);
+  }
+
+  if (et === 'context_injection') {
+    const surfaced = (e.decisions_surfaced || []);
+    if (surfaced.length) parts.push(`<div class="expand-section" style="grid-column:1/-1">
+      <div class="expand-label">Decisions Surfaced</div>
+      <div class="expand-value">${surfaced.map(d => `"${escHtml(d.slice(0, 80))}"`).join(', ')}</div>
+    </div>`);
+  }
+
+  return parts.length ? parts.join('') : '<div class="expand-section" style="grid-column:1/-1"><div class="expand-value" style="color:var(--text-dim)">No additional details available.</div></div>';
+}
+
+/* ── Date range helpers ── */
+function setRange(range, btn) {
+  const now = new Date();
+  document.querySelectorAll('.quick-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+
+  if (range === 'today') {
+    currentFrom = currentTo = isoDate(now);
+  } else if (range === '7d') {
+    const f = new Date(); f.setDate(f.getDate() - 7);
+    currentFrom = isoDate(f); currentTo = isoDate(now);
+  } else if (range === '30d') {
+    const f = new Date(); f.setDate(f.getDate() - 30);
+    currentFrom = isoDate(f); currentTo = isoDate(now);
+  } else {
+    currentFrom = ''; currentTo = '';
+  }
+
+  const fd = document.getElementById('from-date');
+  const td = document.getElementById('to-date');
+  if (fd) fd.value = currentFrom;
+  if (td) td.value = currentTo;
+  renderEntries();
+}
+
+function applyCustomRange() {
+  currentFrom = document.getElementById('from-date').value || '';
+  currentTo   = document.getElementById('to-date').value   || '';
+  document.querySelectorAll('.quick-btn').forEach(b => b.classList.remove('active'));
+  renderEntries();
+}
+
+/* ── Row expand/collapse ── */
+function toggleRow(idx) {
+  const row = document.getElementById('row-' + idx);
+  if (!row) return;
+  row.classList.toggle('expanded');
+}
+
+/* ── Summary cards update ── */
+function updateSummaryCards(filtered) {
+  const isDecision = e => e.event_type === 'decision_recorded' || e.event_type === 'decision_added';
+  const dec = filtered.filter(isDecision).length;
+
+  // Deduplicate contradiction events by contradiction_id to prevent double-counting
+  // (synthesis from contradictions.jsonl + lineage entries from resolve_contradiction())
+  const detectedSet = new Set(
+    filtered.filter(e => e.event_type === 'contradiction_detected').map(contradictionKey).filter(Boolean)
+  );
+  const resolvedSet = new Set(
+    filtered.filter(e => e.event_type === 'contradiction_resolved' || e.event_type === 'contradiction_dismissed')
+            .map(contradictionKey).filter(Boolean)
+  );
+  const detected = detectedSet.size;
+  const reviewed = resolvedSet.size;
+  const res = filtered.filter(e => e.event_type === 'contradiction_resolved').length;
+  const dis = filtered.filter(e => e.event_type === 'contradiction_dismissed').length;
+  const pending = Math.max(0, detected - reviewed);
+
+  // Decisions trend vs prior same period
+  let trend = '';
+  if (currentFrom && currentTo) {
+    const fromD  = new Date(currentFrom);
+    const toD    = new Date(currentTo + 'T23:59:59');
+    const msLen  = toD - fromD;
+    const priorTo   = new Date(fromD - 1);
+    const priorFrom = new Date(priorTo - msLen);
+    const priorFromStr = isoDate(priorFrom);
+    const priorToStr   = isoDate(priorTo);
+    const prior = allEntries.filter(e =>
+      isDecision(e) &&
+      (e.timestamp || '') >= priorFromStr &&
+      (e.timestamp || '') <= priorToStr + 'T23:59:59'
+    ).length;
+    if (prior > 0) {
+      const delta = dec - prior;
+      if (delta > 0) trend = `<span class="sc-trend-up">↑ ${delta} vs prior period</span>`;
+      else if (delta < 0) trend = `<span class="sc-trend-down">↓ ${Math.abs(delta)} vs prior period</span>`;
+      else trend = `<span class="sc-trend-flat">= same as prior period</span>`;
+    }
+  }
+
+  const oversightVal = detected > 0 ? Math.min(100, Math.round(reviewed / detected * 100)) : null;
+  const oversightStr = oversightVal !== null ? oversightVal + '%' : 'N/A';
+
+  const scDec = document.getElementById('sc-decisions');
+  const scDecMeta = document.getElementById('sc-decisions-meta');
+  const scDecTrend = document.getElementById('sc-decisions-trend');
+  if (scDec) scDec.textContent = dec;
+  if (scDecTrend) scDecTrend.innerHTML = trend;
+  if (scDecMeta) scDecMeta.textContent = trend ? '' : 'in selected period';
+
+  const scPend = document.getElementById('sc-pending');
+  const scPendMeta = document.getElementById('sc-pending-meta');
+  if (scPend) {
+    scPend.textContent = pending;
+    scPend.className = 'sc-value' + (pending > 0 ? ' red' : '');
+  }
+  if (scPendMeta) scPendMeta.textContent = pending === 0 ? 'no open conflicts' : 'require human review';
+
+  const scRes = document.getElementById('sc-resolved');
+  const scResMeta = document.getElementById('sc-resolved-meta');
+  if (scRes) scRes.textContent = res;
+  if (scResMeta) scResMeta.textContent = dis > 0 ? `${dis} dismissed` : 'contradictions resolved';
+
+  const scOver = document.getElementById('sc-oversight');
+  const scOverMeta = document.querySelector('.summary-card:last-child .sc-meta');
+  if (scOver) scOver.textContent = oversightStr;
+  if (scOverMeta) scOverMeta.textContent = detected > 0 ? `of ${detected} conflict${detected !== 1 ? 's' : ''} reviewed` : 'no conflicts detected';
+}
+
+/* ── Render ── */
+function renderEntries() {
+  let filtered = allEntries;
+
+  if (currentFrom) {
+    filtered = filtered.filter(e => (e.timestamp || '') >= currentFrom);
+  }
+  if (currentTo) {
+    const toEnd = currentTo + 'T23:59:59';
+    filtered = filtered.filter(e => (e.timestamp || '') <= toEnd);
+  }
+
+  updateSummaryCards(filtered);
+
+  document.getElementById('count-badge').textContent = `${filtered.length} entries`;
   const shown = filtered.slice(0, visibleCount);
-  document.getElementById('showing-badge').textContent = `showing ${shown.length} of ${filtered.length}`;
+  document.getElementById('showing-badge').textContent = `Showing ${shown.length} of ${filtered.length}`;
   document.getElementById('load-more-wrap').style.display = filtered.length > visibleCount ? '' : 'none';
 
   if (filtered.length === 0) {
-    document.getElementById('entries-list').innerHTML = '<div class="empty-state"><div class="empty-icon">⊟</div><div class="empty-title">No entries match</div></div>';
+    document.getElementById('entries-list').innerHTML =
+      '<div class="empty-state"><div class="empty-icon">⊟</div>' +
+      '<div class="empty-title">No entries in this range</div>' +
+      '<div class="empty-desc">Try "All time" or a wider date range.</div></div>';
     return;
   }
 
-  document.getElementById('entries-list').innerHTML = shown.map(e => {
-    const ts = formatTimestamp(e.timestamp);
-    const agent = e.agent || 'unknown';
-    const tool = e.tool_name || e.event_type || '—';
-    const count = e.decision_count || 0;
-    const session = (e.session_id || '').slice(-8);
-    return `<div class="log-row">
-      <div class="log-time">${ts}</div>
-      <div class="log-desc"><strong>${agent}</strong> · <span style="color:var(--purple)">${tool}</span> · session ${session}</div>
-      <div class="log-agent">${(e.decisions_surfaced || []).slice(0, 2).join(', ')}</div>
-      <div class="log-count">${count} surfaced</div>
+  document.getElementById('entries-list').innerHTML = shown.map((e, i) => {
+    const ts  = (e.timestamp || '').replace('T', ' ').slice(0, 16);
+    const actor    = escHtml(e.agent || e.actor || e.source || '—');
+    const reviewer = escHtml(e.reviewer || (
+      e.event_type === 'decision_recorded' || e.event_type === 'decision_added' ? (e.made_by || '—') : '—'
+    ));
+    const badge = statusBadge(e.event_type);
+    const desc  = describeEntry(e);
+    const details = expandDetails(e);
+    const hashTitle = e.content_hash
+      ? `Hash: ${e.content_hash}\nPrev: ${e.prev_hash || 'GENESIS'}`
+      : 'No hash (pre-chain entry)';
+    const shield = `<span class="hash-shield" title="${escHtml(hashTitle)}">${e.content_hash ? '🛡' : '○'}</span>`;
+
+    return `<div class="ledger-row" id="row-${i}">
+      <div class="ledger-row-main" onclick="toggleRow(${i})">
+        <div class="ledger-time">${shield}${ts}</div>
+        <div class="ledger-status">${badge}</div>
+        <div class="ledger-desc">${desc}</div>
+        <div class="ledger-model">${escHtml(modelDisplay(e))}</div>
+        <div class="ledger-conf">${confColumn(e)}</div>
+        <div class="ledger-actor">${actor}</div>
+        <div class="ledger-reviewer">${reviewer}</div>
+      </div>
+      <div class="ledger-expand">${details}</div>
     </div>`;
   }).join('');
 }
@@ -204,30 +700,236 @@ function loadMore() {
   renderEntries();
 }
 
-function exportPDF() {
-  window.open('/api/compliance/export/pdf', '_blank');
+/* ── CSV Export ── */
+function exportCSV() {
+  let filtered = allEntries;
+  if (currentFrom) filtered = filtered.filter(e => (e.timestamp || '') >= currentFrom);
+  if (currentTo)   filtered = filtered.filter(e => (e.timestamp || '') <= currentTo + 'T23:59:59');
+
+  const csvEsc = v => '"' + String(v || '').replace(/"/g, '""') + '"';
+  const header = ['Timestamp','Status','Description','Model','Confidence','Actor','Reviewer','Rationale','Type','UUID','ForensicID'];
+  const rows = filtered.map(e => {
+    const desc = (e.decision_title || e.title || e.explanation || e.winner || e.ignore_reason || e.event_type || '');
+    const actor = e.agent || e.actor || e.source || '';
+    const reviewer = e.reviewer || (e.event_type === 'decision_recorded' || e.event_type === 'decision_added' ? (e.made_by || '') : '');
+    const conf = e.confidence ? confDisplay(parseFloat(e.confidence)) : '';
+    return [
+      e.timestamp || '',
+      e.event_type || '',
+      desc,
+      modelDisplay(e),
+      conf,
+      actor,
+      reviewer,
+      e.rationale || '',
+      e.decision_type || '',
+      e.decision_uuid || e.entry_id || '',
+      e.content_hash || '',
+    ].map(csvEsc).join(',');
+  });
+
+  const csv = [header.join(','), ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = 'audit_trail.csv';
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast('✓ CSV downloaded');
 }
 
-async function loadEntries() {
+/* ── PDF Export ── */
+function exportPDF() {
+  let filtered = allEntries;
+  if (currentFrom) filtered = filtered.filter(e => (e.timestamp || '') >= currentFrom);
+  if (currentTo)   filtered = filtered.filter(e => (e.timestamp || '') <= currentTo + 'T23:59:59');
+
+  const now      = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
+  const rangeStr = currentFrom || currentTo
+    ? `${currentFrom || '…'} to ${currentTo || 'present'}`
+    : 'All time';
+
+  const _isDec  = e => e.event_type === 'decision_recorded' || e.event_type === 'decision_added';
+  const dec     = filtered.filter(_isDec).length;
+  const detectedSet = new Set(
+    filtered.filter(e => e.event_type === 'contradiction_detected').map(contradictionKey).filter(Boolean)
+  );
+  const reviewedSet = new Set(
+    filtered.filter(e => e.event_type === 'contradiction_resolved' || e.event_type === 'contradiction_dismissed')
+            .map(contradictionKey).filter(Boolean)
+  );
+  const detected = detectedSet.size;
+  const reviewed = reviewedSet.size;
+  const res  = filtered.filter(e => e.event_type === 'contradiction_resolved').length;
+  const pending = Math.max(0, detected - reviewed);
+  const oversight = detected > 0 ? Math.min(100, Math.round(reviewed / detected * 100)) + '%' : 'N/A';
+
+  const statusLabel = et => ({
+    decision_recorded: 'Added',
+    decision_added: 'Added',
+    contradiction_detected: 'Conflict',
+    contradiction_resolved: 'Resolved',
+    contradiction_dismissed: 'Dismissed',
+    context_injection: 'Context',
+  }[et] || et);
+
+  const rows = filtered.map(e => {
+    const ts   = (e.timestamp || '').replace('T', ' ').slice(0, 16);
+    const desc = (e.decision_title || e.title || e.explanation || e.winner || e.ignore_reason || e.event_type || '');
+    const actor = e.agent || e.actor || e.source || '—';
+    const reviewer = e.reviewer || (e.event_type === 'decision_recorded' || e.event_type === 'decision_added' ? (e.made_by || '—') : '—');
+    const conf = e.confidence ? confDisplay(parseFloat(e.confidence)) : '—';
+    const model = modelDisplay(e);
+    return `<tr>
+      <td style="white-space:nowrap;color:#78716c;font-family:monospace;font-size:10px">${escHtml(ts)}</td>
+      <td style="white-space:nowrap">${escHtml(statusLabel(e.event_type))}</td>
+      <td>${escHtml(desc.slice(0, 100))}</td>
+      <td style="color:#78716c;font-size:10px;white-space:nowrap">${escHtml(model)}</td>
+      <td style="color:#78716c;font-size:10px;text-align:right">${escHtml(conf)}</td>
+      <td style="color:#78716c;font-size:10px">${escHtml(actor)}</td>
+      <td style="color:#78716c;font-size:10px">${escHtml(reviewer)}</td>
+    </tr>`;
+  }).join('');
+
+  const repoName = (document.getElementById('sb-repo-name') || {}).textContent || 'smm-sync';
+
+  const html = `<!DOCTYPE html><html><head><title>AI Governance Audit Report</title>
+<style>
+  body { font-family: -apple-system, sans-serif; font-size: 11px; margin: 1.5cm 2cm; color: #1a1917; }
+  h1 { font-size: 18px; margin-bottom: 4px; }
+  .meta { color: #78716c; font-size: 10px; margin-bottom: 12px; }
+  .cards { display: flex; gap: 12px; margin-bottom: 16px; }
+  .card { border: 1px solid #e8e5e0; border-radius: 6px; padding: 8px 12px; flex: 1; }
+  .card-label { font-size: 9px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; color: #a8a29e; margin-bottom: 3px; }
+  .card-value { font-size: 22px; font-weight: 600; color: #1a1917; }
+  .card-value.red { color: #dc2626; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; padding: 5px 6px; border-bottom: 2px solid #e8e5e0; font-size: 9px; text-transform: uppercase; color: #78716c; letter-spacing: 0.5px; }
+  td { padding: 5px 6px; border-bottom: 1px solid #f0ede8; vertical-align: top; font-size: 11px; line-height: 1.4; }
+  .footer { margin-top: 20px; color: #a8a29e; font-size: 10px; text-align: right; }
+  @media print { body { margin: 1cm; } }
+</style></head><body>
+<h1>AI Governance Audit Trail</h1>
+<div class="meta">Project: ${escHtml(repoName)} &emsp;·&emsp; Period: ${rangeStr} &emsp;·&emsp; Generated: ${now}</div>
+<div class="cards">
+  <div class="card"><div class="card-label">Decisions Captured</div><div class="card-value">${dec}</div></div>
+  <div class="card"><div class="card-label">Pending Reviews</div><div class="card-value${pending > 0 ? ' red' : ''}">${pending}</div></div>
+  <div class="card"><div class="card-label">Resolved</div><div class="card-value">${res}</div></div>
+  <div class="card"><div class="card-label">Human Oversight</div><div class="card-value">${oversight}</div></div>
+</div>
+<table>
+  <thead><tr><th>Timestamp</th><th>Status</th><th>Description</th><th>Model</th><th>Conf</th><th>Actor</th><th>Reviewer</th></tr></thead>
+  <tbody>${rows}</tbody>
+</table>
+<div class="footer">Generated by CaaS · AI Governance Audit Trail · ${now}</div>
+<script>window.onload=function(){window.print();}<\/script>
+</body></html>`;
+
+  const w = window.open('', '_blank');
+  if (w) { w.document.write(html); w.document.close(); }
+  else { showToast('✗ Allow pop-ups for this site to export PDF'); }
+}
+
+/* ── Verify integrity ── */
+async function verifyIntegrity() {
+  const btn = document.getElementById('verify-btn');
+  const banner = document.getElementById('verify-banner');
+  const lastVerifiedEl = document.getElementById('last-verified');
+  if (btn) { btn.disabled = true; btn.textContent = '🛡 Verifying…'; }
+  if (banner) { banner.style.display = 'none'; }
   try {
-    const data = await fetch('/api/compliance?limit=500').then(r => r.json());
-    allEntries = data.entries || [];
-    document.getElementById('count-badge').textContent = `${data.total || allEntries.length} total`;
-    renderEntries();
-  } catch (e) {
-    document.getElementById('entries-list').innerHTML = '<div class="empty-state"><div class="empty-icon">⚠</div><div class="empty-title">Could not load compliance log</div><div class="empty-desc">API unavailable.</div></div>';
+    const result = await fetch('/api/compliance/verify').then(r => r.json());
+    if (banner) {
+      if (result.valid === true) {
+        if ((result.hashed || result.total || 0) === 0) {
+          banner.style.cssText = 'display:flex;padding:10px 16px;border-radius:8px;font-size:12px;font-weight:500;align-items:center;gap:8px;background:var(--surface-2);border:1px solid var(--border-dark);color:var(--text-muted)';
+          banner.innerHTML = `<span style="font-size:16px">○</span> No hashed entries found. Hash chain starts on next write.`;
+        } else {
+          banner.style.cssText = 'display:flex;padding:10px 16px;border-radius:8px;font-size:12px;font-weight:500;align-items:center;gap:8px;background:var(--green-light);border:1px solid var(--green-border);color:var(--green)';
+          banner.innerHTML = `<span style="font-size:16px">🛡</span> Hash chain verified — all ${result.hashed || result.total} entries intact. Chain is tamper-evident.`;
+        }
+      } else if (result.valid === false) {
+        const n = result.broken_at || '?';
+        const titlePart = result.broken_title ? `: <strong>${escHtml(result.broken_title)}</strong>` : '';
+        const afterCount = result.entries_after != null ? result.entries_after : '?';
+        const afterMsg = afterCount > 0
+          ? ` <strong>${afterCount}</strong> entr${afterCount === 1 ? 'y' : 'ies'} after this point may have been modified.`
+          : '';
+        banner.style.cssText = 'display:flex;flex-direction:column;align-items:flex-start;padding:12px 16px;border-radius:8px;font-size:12px;font-weight:500;gap:6px;background:var(--red-light);border:1px solid var(--red-border);color:var(--red)';
+        banner.innerHTML =
+          `<div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600">` +
+          `<span>❌</span> Chain integrity failure at entry ${n}${titlePart}.` +
+          `</div>` +
+          `<div style="font-weight:400;color:var(--text-mid)">${afterMsg} Contact your security team.</div>`;
+      } else {
+        banner.style.cssText = 'display:flex;padding:10px 16px;border-radius:8px;font-size:12px;font-weight:500;align-items:center;gap:8px;background:var(--amber-light);border:1px solid var(--amber-border);color:var(--amber)';
+        banner.innerHTML = `<span style="font-size:16px">⚠</span> ${escHtml(result.message || result.detail || 'Verification returned unexpected response')}`;
+      }
+    }
+    // Record last-verified timestamp
+    const now = new Date();
+    const ts = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + now.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    try { localStorage.setItem('smm_last_verified', ts); } catch(_) {}
+    if (lastVerifiedEl) lastVerifiedEl.textContent = 'Last verified: ' + ts;
+  } catch(err) {
+    if (banner) {
+      banner.style.cssText = 'display:flex;padding:10px 16px;border-radius:8px;font-size:12px;font-weight:500;align-items:center;gap:8px;background:var(--amber-light);border:1px solid var(--amber-border);color:var(--amber)';
+      banner.innerHTML = `<span style="font-size:16px">⚠</span> Verification failed: API unavailable`;
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🛡 Verify Integrity'; }
   }
 }
 
-window.addEventListener('load', loadEntries);
+/* ── Load ── */
+async function loadEntries() {
+  try {
+    const data = await fetch('/api/compliance?limit=2000').then(r => r.json());
+    allEntries = data.entries || [];
+    renderEntries();
+  } catch(e) {
+    document.getElementById('entries-list').innerHTML =
+      '<div class="empty-state"><div class="empty-icon">⚠</div>' +
+      '<div class="empty-title">Could not load audit log</div>' +
+      '<div class="empty-desc">API unavailable — check server.</div></div>';
+  }
+}
+
+/* Init: default to last 7 days */
+(function() {
+  const now  = new Date();
+  const from = new Date(); from.setDate(from.getDate() - 7);
+  currentFrom = isoDate(from);
+  currentTo   = isoDate(now);
+  document.addEventListener('DOMContentLoaded', function() {
+    const fd = document.getElementById('from-date');
+    const td = document.getElementById('to-date');
+    if (fd) fd.value = currentFrom;
+    if (td) td.value = currentTo;
+  });
+})();
+
+window.addEventListener('load', function() {
+  loadEntries();
+  // Restore last-verified timestamp from localStorage
+  try {
+    const ts = localStorage.getItem('smm_last_verified');
+    const el = document.getElementById('last-verified');
+    if (ts && el) el.textContent = 'Last verified: ' + ts;
+  } catch(_) {}
+});
 </script>
+
 <script>
-// Sidebar dynamic data
+/* Sidebar dynamic data */
 (async function() {
   try {
     const stats = await fetch('/api/stats').then(r => r.json());
     const el1 = document.getElementById('sb-decisions-badge');
     if (el1) el1.textContent = stats.decisions || '—';
+    const el2 = document.getElementById('sb-board-badge');
+    if (el2) el2.textContent = stats.pending_decisions != null ? stats.pending_decisions : (stats.contradictions || '—');
     const el4 = document.getElementById('sb-compliance-badge');
     if (el4) el4.textContent = stats.injections_total || '—';
     const agents = await fetch('/api/agents').then(r => r.json());

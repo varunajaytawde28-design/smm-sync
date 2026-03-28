@@ -23,6 +23,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import yaml
 
+from smm_sync.config import DEFAULT_DASHBOARD_PORT
+
 
 # ---------------------------------------------------------------------------
 # Fix 1: Injection sanitization
@@ -65,7 +67,7 @@ class TestSanitizeInjectionPattern:
         assert flagged is False
 
         result, flagged = sanitize_content(None)  # type: ignore
-        assert result is None
+        assert result == ""
         assert flagged is False
 
     def test_sanitize_ssh_key_pattern_filtered(self):
@@ -194,33 +196,38 @@ class TestCaptureAuthFailure:
 class TestDashboardPortContention:
     def test_dashboard_tries_next_port_if_busy(self, tmp_path):
         """run_dashboard must try next port when default is occupied."""
-        import threading
-
-        # Occupy port 7842
+        # Try to occupy the default dashboard port ourselves; if it's already occupied by another
+        # process (e.g. the running dashboard) we reuse that existing situation.
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        srv.bind(("127.0.0.1", 7842))
-        srv.listen(1)
+        port_already_occupied = False
+        try:
+            srv.bind(("127.0.0.1", DEFAULT_DASHBOARD_PORT))
+            srv.listen(1)
+        except OSError:
+            # Default dashboard port already in use — the precondition is met without us
+            port_already_occupied = True
+            srv.close()
+            srv = None
 
         used_port = [None]
-        original_uvicorn_run = None
 
         try:
             import uvicorn
-            original_uvicorn_run = uvicorn.run
 
             def mock_uvicorn_run(app, host, port, **kwargs):
                 used_port[0] = port
 
             with patch("smm_sync.dashboard.app.uvicorn.run", side_effect=mock_uvicorn_run):
                 from smm_sync.dashboard.app import run_dashboard
-                run_dashboard(host="127.0.0.1", port=7842)
+                run_dashboard(host="127.0.0.1", port=DEFAULT_DASHBOARD_PORT)
 
-            # Should have fallen back to 7843 (or similar)
+            # Should have fallen back to a different port (7843 or similar)
             assert used_port[0] is not None
-            assert used_port[0] != 7842 or used_port[0] == 7843
+            assert used_port[0] != DEFAULT_DASHBOARD_PORT
         finally:
-            srv.close()
+            if srv is not None:
+                srv.close()
 
 
 # ---------------------------------------------------------------------------
@@ -393,7 +400,7 @@ class TestHostWarning:
         runner = CliRunner()
         result = runner.invoke(
             main,
-            ["dashboard", "--host", "192.168.1.1", "--port", "7842"],
+            ["dashboard", "--host", "192.168.1.1", "--port", str(DEFAULT_DASHBOARD_PORT)],
             input="n\n",  # Decline confirmation
             catch_exceptions=False,
         )

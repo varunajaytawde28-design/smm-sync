@@ -8,101 +8,134 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.0/index.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
 <style>
   :root {
-    --bg: #fafaf8; --surface: #ffffff; --surface-2: #f4f4f0;
-    --border: #e8e5e0; --border-dark: #d4d0ca;
-    --text: #1a1917; --text-mid: #44403c; --text-muted: #78716c; --text-dim: #a8a29e;
-    --accent: #2563eb; --accent-light: #eff6ff; --accent-border: #bfdbfe;
-    --green: #16a34a; --green-light: #f0fdf4; --green-border: #bbf7d0;
-    --amber: #d97706; --amber-light: #fffbeb; --amber-border: #fde68a;
-    --red: #dc2626; --red-light: #fef2f2; --red-border: #fecaca;
-    --purple: #7c3aed; --purple-light: #f5f3ff; --purple-border: #ddd6fe;
-    --surface-3: #eeede9;
-    --border-2: #d4d0ca;
-    --mono: 'JetBrains Mono', 'Fira Code', monospace;
-    --serif: 'Instrument Serif', Georgia, serif;
-    --sans: 'Geist', system-ui, sans-serif;
+    --bg:#fafaf8;--surface:#ffffff;--surface-2:#f4f4f0;
+    --border:#e8e5e0;--border-dark:#d4d0ca;
+    --text:#1a1917;--text-mid:#44403c;--text-muted:#78716c;--text-dim:#a8a29e;
+    --accent:#2563eb;--accent-light:#eff6ff;--accent-border:#bfdbfe;
+    --green:#16a34a;--green-light:#f0fdf4;--green-border:#bbf7d0;
+    --amber:#d97706;--amber-light:#fffbeb;--amber-border:#fde68a;
+    --red:#dc2626;--red-light:#fef2f2;--red-border:#fecaca;
+    --purple:#7c3aed;--purple-light:#f5f3ff;--purple-border:#ddd6fe;
+    --serif:'Instrument Serif',Georgia,serif;
+    --sans:'Geist',system-ui,sans-serif;
   }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Geist', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; font-size: 14px; overflow: hidden; }
-  .sidebar { width: 208px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: 50; }
-  .logo { padding: 20px 18px 16px; border-bottom: 1px solid var(--border); }
-  .logo-wordmark { font-family: var(--serif); font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 8px; letter-spacing: -0.5px; }
-  .logo-icon { width: 28px; height: 28px; background: var(--accent); border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 13px; color: white; font-weight: 700; }
-  .logo-sub { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
-  .nav { flex: 1; padding: 10px 8px; overflow-y: auto; }
-  .nav-section { margin-bottom: 16px; }
-  .nav-label { font-size: 10px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; color: var(--text-dim); padding: 0 10px; margin-bottom: 3px; }
-  .nav-item { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 7px; cursor: pointer; font-size: 13px; color: var(--text-muted); transition: all 0.12s; }
-  .nav-item:hover { background: var(--surface-2); color: var(--text); }
-  .nav-item.active { color: var(--accent); font-weight: 500; background: transparent; border-left: 2px solid var(--accent); border-radius: 0 6px 6px 0; padding-left: 7px; }
-  .nav-icon { font-size: 14px; width: 18px; text-align: center; }
-  .nav-badge { margin-left: auto; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 10px; background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); }
-  .nav-badge.blue { background: var(--accent-light); color: var(--accent); border-color: var(--accent-border); }
-  .nav-soon { margin-left: auto; font-size: 9px; padding: 1px 5px; border-radius: 4px; background: var(--surface-2); color: var(--text-dim); }
-  .sidebar-footer { padding: 12px; border-top: 1px solid var(--border); }
-  .main { margin-left: 208px; flex: 1; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-  .topbar { height: 48px; border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 24px; gap: 10px; background: var(--surface); flex-shrink: 0; z-index: 40; }
-  .topbar-title { font-family: var(--serif); font-size: 15px; font-weight: 600; flex: 1; }
-  .btn { padding: 7px 14px; border-radius: 7px; font-size: 12px; font-family: 'Geist', sans-serif; font-weight: 500; cursor: pointer; border: none; transition: all 0.12s; display: inline-flex; align-items: center; gap: 5px; text-decoration: none; }
-  .btn-primary { background: var(--accent); color: white; }
-  .btn-primary:hover { background: #1d4ed8; }
-  .btn-outline { background: transparent; color: var(--text-mid); border: 1px solid var(--border-dark); }
-  .btn-outline:hover { background: var(--surface-2); }
-  .btn-ghost { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
-  .btn-ghost:hover { color: var(--text); border-color: var(--border-dark); }
-  .btn-sm { padding: 4px 9px; font-size: 11px; border-radius: 5px; }
-  .graph-wrap { flex: 1; position: relative; background: var(--bg); overflow: hidden; }
-  #cy { width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
-  .graph-controls { position: absolute; bottom: 16px; right: 16px; display: flex; gap: 4px; z-index: 10; }
-  .graph-btn { width: 30px; height: 30px; border-radius: 6px; background: var(--surface); border: 1px solid var(--border); cursor: pointer; font-size: 15px; display: flex; align-items: center; justify-content: center; color: var(--text-muted); transition: all 0.1s; }
-  .graph-btn:hover { background: var(--surface-2); color: var(--text); }
-  .graph-legend { position: absolute; bottom: 16px; left: 16px; display: flex; gap: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 10px; color: var(--text-muted); z-index: 10; }
-  .legend-item { display: flex; align-items: center; gap: 4px; }
-  .legend-dot { width: 7px; height: 7px; border-radius: 50%; }
-  .query-bar { position: absolute; top: 12px; right: 16px; display: flex; gap: 6px; z-index: 10; }
-  .query-field { background: var(--surface); border: 1px solid var(--border-dark); border-radius: 7px; padding: 6px 10px; font-size: 12px; font-family: 'Geist', sans-serif; color: var(--text); outline: none; width: 200px; }
-  .query-field:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-light); }
-  .node-detail { position: absolute; top: 12px; left: 16px; width: 270px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; box-shadow: 0 8px 28px rgba(0,0,0,0.1); display: none; z-index: 20; }
-  .node-detail.visible { display: block; }
-  .nd-header { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: flex-start; gap: 8px; }
-  .nd-title { font-size: 12px; font-weight: 600; line-height: 1.4; flex: 1; }
-  .nd-close { font-size: 16px; color: var(--text-dim); cursor: pointer; flex-shrink: 0; line-height: 1; background: none; border: none; }
-  .nd-body { padding: 10px 12px; }
-  .nd-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 11px; }
-  .nd-key { color: var(--text-muted); }
-  .nd-val { color: var(--text); font-weight: 500; }
-  .nd-section { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
-  .nd-section-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); margin-bottom: 4px; }
-  .nd-text { font-size: 11px; color: var(--text-mid); line-height: 1.6; }
-  .nd-footer { padding: 8px 12px; border-top: 1px solid var(--border); display: flex; gap: 6px; }
-  .tag { display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 500; border: 1px solid transparent; }
-  .tag-architectural { background: var(--accent-light); color: var(--accent); border-color: var(--accent-border); }
-  .tag-technical { background: var(--purple-light); color: var(--purple); border-color: var(--purple-border); }
-  .tag-product { background: var(--green-light); color: var(--green); border-color: var(--green-border); }
-  .tag-constraint { background: var(--red-light); color: var(--red); border-color: var(--red-border); }
-  .tag-superseded { background: var(--surface-2); color: var(--text-dim); border-color: var(--border); }
-  .confidence-pill { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 20px; }
-  .conf-high { background: var(--green-light); color: var(--green); border: 1px solid var(--green-border); }
-  .conf-mid { background: var(--amber-light); color: var(--amber); border: 1px solid var(--amber-border); }
-  .conf-low { background: var(--red-light); color: var(--red); border: 1px solid var(--red-border); }
-  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--text); color: white; padding: 10px 18px; border-radius: 8px; font-size: 12px; opacity: 0; transition: all 0.3s; z-index: 1000; pointer-events: none; }
-  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-  ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: var(--border-dark); border-radius: 10px; }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:100vh;display:flex;font-size:14px;overflow:hidden}
+
+  /* Sidebar */
+  .sidebar{width:208px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:50}
+  .nav{flex:1;padding:10px 8px;overflow-y:auto}
+  .nav-section{margin-bottom:16px}
+  .nav-label{font-size:10px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:var(--text-dim);padding:0 10px;margin-bottom:3px}
+  .nav-item{display:flex;align-items:center;gap:8px;padding:6px 9px;border-radius:7px;cursor:pointer;font-size:13px;color:var(--text-muted);transition:all .12s;text-decoration:none}
+  .nav-item:hover{background:var(--surface-2);color:var(--text)}
+  .nav-item.active{color:var(--accent);font-weight:500;background:transparent;border-left:2px solid var(--accent);border-radius:0 6px 6px 0;padding-left:7px}
+  .nav-icon{font-size:14px;width:18px;text-align:center}
+  .nav-badge{margin-left:auto;font-size:10px;font-weight:600;padding:1px 6px;border-radius:10px;background:var(--surface-2);color:var(--text-muted);border:1px solid var(--border)}
+  .nav-soon{margin-left:auto;font-size:9px;padding:1px 5px;border-radius:4px;background:var(--surface-2);color:var(--text-dim)}
+  .sidebar-footer{padding:12px;border-top:1px solid var(--border)}
+
+  /* Main */
+  .main{margin-left:208px;flex:1;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+  .topbar{height:48px;border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 16px;gap:8px;background:var(--surface);flex-shrink:0;z-index:40}
+  .topbar-title{font-family:var(--serif);font-size:15px;font-weight:600;flex:1}
+  .btn{padding:6px 12px;border-radius:6px;font-size:12px;font-family:var(--sans);font-weight:500;cursor:pointer;border:none;transition:all .12s;display:inline-flex;align-items:center;gap:5px;text-decoration:none}
+  .btn-ghost{background:transparent;color:var(--text-dim);border:1px solid var(--border)}
+  .btn-ghost:hover{color:var(--text);border-color:var(--border-dark)}
+  .btn-sm{padding:4px 9px;font-size:11px;border-radius:5px}
+
+  /* View toggle */
+  .view-toggle{display:flex;gap:1px;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:2px}
+  .view-btn{padding:4px 10px;border-radius:4px;font-size:11px;font-weight:500;cursor:pointer;border:none;background:transparent;color:var(--text-muted);transition:all .12s;white-space:nowrap}
+  .view-btn:hover{color:var(--text);background:var(--surface)}
+  .view-btn.active{background:var(--surface);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+
+  /* Graph canvas */
+  .graph-wrap{flex:1;position:relative;background:var(--bg);overflow:hidden}
+  #cy{width:100%;height:100%;position:absolute;top:0;left:0}
+
+  /* Stats bar */
+  #graph-stats{position:absolute;top:10px;left:50%;transform:translateX(-50%);background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:4px 14px;font-size:11px;color:var(--text-muted);z-index:10;pointer-events:none;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+
+  /* Search */
+  .query-bar{position:absolute;top:10px;right:56px;display:flex;gap:5px;z-index:10}
+  .query-field{background:var(--surface);border:1px solid var(--border-dark);border-radius:6px;padding:5px 10px;font-size:12px;font-family:var(--sans);color:var(--text);outline:none;width:190px}
+  .query-field:focus{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-light)}
+
+  /* Zoom controls */
+  .graph-controls{position:absolute;top:10px;right:12px;display:flex;flex-direction:column;gap:3px;z-index:10}
+  .graph-btn{width:28px;height:28px;border-radius:5px;background:var(--surface);border:1px solid var(--border);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);transition:all .1s}
+  .graph-btn:hover{background:var(--surface-2);color:var(--text)}
+
+  /* Legend */
+  .graph-legend{position:absolute;bottom:14px;left:14px;background:var(--surface);border:1px solid var(--border);border-radius:7px;padding:8px 12px;font-size:10px;color:var(--text-muted);z-index:10;min-width:148px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+  .legend-section{margin-bottom:7px}
+  .legend-section:last-child{margin-bottom:0}
+  .legend-heading{font-size:9px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--text-dim);margin-bottom:4px}
+  .legend-item{display:flex;align-items:center;gap:6px;margin-bottom:3px;line-height:1.3}
+  .legend-item:last-child{margin-bottom:0}
+  .legend-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+  .legend-line{width:18px;height:2px;flex-shrink:0;border-radius:1px}
+  .legend-line-dashed{width:18px;height:0;border-top:2px dashed #9ca3af;flex-shrink:0}
+
+  /* Node detail panel */
+  .detail-panel{position:absolute;top:10px;left:14px;width:276px;background:var(--surface);border:1px solid var(--border);border-radius:9px;box-shadow:0 8px 28px rgba(0,0,0,.10);display:none;z-index:20}
+  .detail-panel.visible{display:block}
+  .dp-header{padding:10px 12px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;gap:8px}
+  .dp-title{font-size:12px;font-weight:600;line-height:1.4;flex:1}
+  .dp-close{font-size:16px;color:var(--text-dim);cursor:pointer;flex-shrink:0;line-height:1;background:none;border:none;padding:0}
+  .dp-body{padding:10px 12px}
+  .dp-row{display:flex;justify-content:space-between;margin-bottom:5px;font-size:11px}
+  .dp-key{color:var(--text-muted)}
+  .dp-val{color:var(--text);font-weight:500;text-align:right;max-width:160px}
+  .dp-section{margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}
+  .dp-section-label{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text-dim);margin-bottom:4px}
+  .dp-text{font-size:11px;color:var(--text-mid);line-height:1.6}
+  .dp-footer{padding:8px 12px;border-top:1px solid var(--border);display:flex;gap:5px}
+  .tag{display:inline-flex;align-items:center;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:500;border:1px solid transparent}
+  .tag-architectural{background:var(--accent-light);color:var(--accent);border-color:var(--accent-border)}
+  .tag-technical{background:#f0fdf4;color:#16a34a;border-color:#bbf7d0}
+  .tag-product{background:var(--purple-light);color:var(--purple);border-color:var(--purple-border)}
+  .tag-constraint{background:var(--amber-light);color:var(--amber);border-color:var(--amber-border)}
+  .tag-superseded{background:var(--surface-2);color:var(--text-dim);border-color:var(--border)}
+  .conf-pill{font-size:10px;font-weight:600;padding:2px 6px;border-radius:20px}
+  .conf-high{background:var(--green-light);color:var(--green);border:1px solid var(--green-border)}
+  .conf-mid{background:var(--amber-light);color:var(--amber);border:1px solid var(--amber-border)}
+  .conf-low{background:var(--red-light);color:var(--red);border:1px solid var(--red-border)}
+
+  /* Sprint header overlay */
+  #sprint-header{display:none;position:absolute;top:0;left:0;right:0;height:26px;overflow:hidden;pointer-events:none;z-index:5}
+  .sprint-label{position:absolute;font-size:9px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;color:var(--text-dim);background:var(--surface-2);border-right:1px solid var(--border);padding:0 6px;height:26px;display:flex;align-items:center;white-space:nowrap}
+
+  /* Toast */
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--text);color:white;padding:10px 18px;border-radius:8px;font-size:12px;opacity:0;transition:all .3s;z-index:1000;pointer-events:none}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  /* Node hover tooltip */
+  #node-tooltip{position:fixed;z-index:200;background:#1c1a17;color:#f5f5f0;border-radius:7px;padding:9px 12px;font-size:11px;max-width:280px;pointer-events:none;box-shadow:0 6px 20px rgba(0,0,0,.28);line-height:1.5;display:none}
+  #node-tooltip strong{display:block;margin-bottom:4px;font-size:12px;color:#ffffff}
+  #node-tooltip span{color:#a8a29e;font-size:10px}
+  ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--border-dark);border-radius:10px}
+
+  /* Empty state */
+  .empty-graph{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;color:var(--text-dim);pointer-events:none}
+  .empty-graph-icon{font-size:48px;margin-bottom:12px;opacity:.35}
+  .empty-graph-title{font-family:var(--serif);font-size:18px;font-weight:600;color:var(--text-muted);margin-bottom:4px}
+  .empty-graph-desc{font-size:12px}
 </style>
 </head>
 <body>
 <div class="toast" id="toast"></div>
 
 <aside class="sidebar">
-  <div class="logo" style="padding:16px 14px 12px;border-bottom:1px solid var(--border)">
-    <div class="logo-wordmark" style="font-family:var(--serif);font-size:19px;font-weight:600;display:flex;align-items:center;gap:8px;letter-spacing:-0.3px">
-      <div class="logo-icon" style="width:26px;height:26px;background:var(--accent);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;color:white;font-weight:700;flex-shrink:0">C</div>
+  <div style="padding:16px 14px 12px;border-bottom:1px solid var(--border)">
+    <div style="font-family:var(--serif);font-size:19px;font-weight:600;display:flex;align-items:center;gap:8px;letter-spacing:-0.3px">
+      <div style="width:26px;height:26px;background:var(--accent);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;color:white;font-weight:700;flex-shrink:0">C</div>
       CaaS
     </div>
     <div style="font-size:11px;color:var(--text-dim);margin-top:2px;padding-left:34px">context-as-a-service</div>
@@ -114,23 +147,23 @@
   <nav class="nav">
     <div class="nav-section">
       <div class="nav-label">OVERVIEW</div>
-      <a class="nav-item" href="/" style="text-decoration:none"><span class="nav-icon">◈</span><span>Dashboard</span></a>
+      <a class="nav-item" href="/"><span class="nav-icon">◈</span><span>Dashboard</span></a>
     </div>
     <div class="nav-section">
       <div class="nav-label">KNOWLEDGE</div>
-      <a class="nav-item" href="/decisions" style="text-decoration:none"><span class="nav-icon">◇</span><span>All Decisions</span><span class="nav-badge" id="sb-decisions-badge">—</span></a>
-      <a class="nav-item active" href="/graph" style="text-decoration:none"><span class="nav-icon">⬡</span><span>Decision Graph</span></a>
-      <a class="nav-item" href="/board" style="text-decoration:none"><span class="nav-icon">⊞</span><span>Decision Board</span><span class="nav-badge" id="sb-board-badge">—</span></a>
-      <a class="nav-item" href="/timeline" style="text-decoration:none"><span class="nav-icon">⏱</span><span>Time-Travel</span></a>
+      <a class="nav-item" href="/decisions"><span class="nav-icon">◇</span><span>All Decisions</span><span class="nav-badge" id="sb-decisions-badge">—</span></a>
+      <a class="nav-item active" href="/graph"><span class="nav-icon">⬡</span><span>Decision Graph</span></a>
+      <a class="nav-item" href="/board"><span class="nav-icon">⊞</span><span>Decision Board</span><span class="nav-badge" id="sb-board-badge">—</span></a>
+      <a class="nav-item" href="/timeline"><span class="nav-icon">⏱</span><span>Time-Travel</span></a>
     </div>
     <div class="nav-section">
       <div class="nav-label">COMPLIANCE</div>
-      <a class="nav-item" href="/compliance" style="text-decoration:none"><span class="nav-icon">⊟</span><span>Audit Trail</span><span class="nav-badge" id="sb-compliance-badge">—</span></a>
+      <a class="nav-item" href="/compliance"><span class="nav-icon">⊟</span><span>Audit Trail</span><span class="nav-badge" id="sb-compliance-badge">—</span></a>
     </div>
     <div class="nav-section">
       <div class="nav-label">CAPTURE</div>
-      <a class="nav-item" href="#" style="text-decoration:none"><span class="nav-icon">⑂</span><span>GitHub</span><span class="nav-badge blue" id="sb-github-badge">—</span></a>
-      <a class="nav-item" href="#" style="text-decoration:none"><span class="nav-icon">#</span><span>Slack</span><span class="nav-soon">soon</span></a>
+      <span class="nav-item" style="cursor:default;opacity:0.55"><span class="nav-icon">⑂</span><span>GitHub</span><span class="nav-soon">soon</span></span>
+      <span class="nav-item" style="cursor:default;opacity:0.55"><span class="nav-icon">#</span><span>Slack</span><span class="nav-soon">soon</span></span>
     </div>
   </nav>
   <div class="sidebar-footer">
@@ -147,242 +180,781 @@
 
 <main class="main">
   <div class="topbar">
-    <div class="topbar-title">Decision Graph</div>
-    <a href="/" class="btn btn-ghost">← Dashboard</a>
+    <div class="topbar-title">⬡ Decision Graph</div>
+    <a href="/" class="btn btn-ghost btn-sm">← Dashboard</a>
+    <div class="view-toggle">
+      <button class="view-btn active" id="vbtn-contradictions" onclick="switchView('contradictions')">Contradictions</button>
+      <button class="view-btn" id="vbtn-all" onclick="switchView('all')">All Decisions</button>
+      <button class="view-btn" id="vbtn-sprints" onclick="switchView('sprints')">Sprint Timeline</button>
+    </div>
   </div>
+
   <div class="graph-wrap">
     <div id="cy"></div>
+    <div id="sprint-header"></div>
+    <div id="node-tooltip"></div>
+
+    <div id="graph-stats">loading…</div>
+
     <div class="query-bar">
-      <input class="query-field" id="graph-query" placeholder="Search graph..." />
-      <button class="btn btn-primary btn-sm" onclick="runQuery()">→</button>
-    </div>
-    <div class="node-detail" id="node-detail">
-      <div class="nd-header">
-        <div class="nd-title" id="nd-title"></div>
-        <button class="nd-close" onclick="closeNodeDetail()">×</button>
-      </div>
-      <div class="nd-body">
-        <div style="margin-bottom:10px">
-          <span class="tag" id="nd-type-badge"></span>
-          <span class="confidence-pill" id="nd-conf-pill" style="margin-left:6px"></span>
-        </div>
-        <div class="nd-row"><span class="nd-key">Date</span><span class="nd-val" id="nd-date"></span></div>
-        <div class="nd-row"><span class="nd-key">Source</span><span class="nd-val" id="nd-source-display"></span></div>
-        <div class="nd-section"><div class="nd-section-label">Rationale</div><div class="nd-text" id="nd-rationale"></div></div>
-        <div class="nd-section" id="nd-overrides-wrap"><div class="nd-section-label">Overrides</div><div class="nd-text" style="color:var(--amber)" id="nd-overrides"></div></div>
-      </div>
-      <div class="nd-footer">
-        <button class="btn btn-outline btn-sm" style="flex:1" onclick="downloadCurrentNode()">↓ Export md</button>
-        <button class="btn btn-outline btn-sm" style="flex:1;display:none" id="nd-source-btn" onclick="openSource()">↗ View Source</button>
-      </div>
-    </div>
-    <div class="graph-legend">
-      <div class="legend-item"><div class="legend-dot" style="background:#2563eb"></div>Arch</div>
-      <div class="legend-item"><div class="legend-dot" style="background:#7c3aed"></div>Tech</div>
-      <div class="legend-item"><div class="legend-dot" style="background:#16a34a"></div>Product</div>
-      <div class="legend-item"><div class="legend-dot" style="background:#dc2626"></div>Constraint</div>
-      <div class="legend-item"><div class="legend-dot" style="background:#d97706"></div>Superseded</div>
+      <input class="query-field" id="graph-query" placeholder="Search…" />
     </div>
     <div class="graph-controls">
-      <div class="graph-btn" onclick="zoomIn()">+</div>
-      <div class="graph-btn" onclick="zoomOut()">−</div>
-      <div class="graph-btn" onclick="resetZoom()">⊡</div>
+      <div class="graph-btn" onclick="zoomIn()" title="Zoom in">+</div>
+      <div class="graph-btn" onclick="zoomOut()" title="Zoom out">−</div>
+      <div class="graph-btn" onclick="resetZoom()" title="Fit to screen">⊡</div>
+    </div>
+
+    <!-- Node detail panel -->
+    <div class="detail-panel" id="node-detail">
+      <div class="dp-header">
+        <div class="dp-title" id="nd-title"></div>
+        <button class="dp-close" onclick="closeNodeDetail()">×</button>
+      </div>
+      <div class="dp-body">
+        <div style="margin-bottom:8px;display:flex;align-items:center;gap:6px">
+          <span class="tag" id="nd-type-badge"></span>
+          <span class="conf-pill" id="nd-conf-pill"></span>
+        </div>
+        <div class="dp-row"><span class="dp-key">Date</span><span class="dp-val" id="nd-date"></span></div>
+        <div class="dp-row"><span class="dp-key">Source</span><span class="dp-val" id="nd-source"></span></div>
+        <div class="dp-section" id="nd-rationale-wrap">
+          <div class="dp-section-label">Rationale</div>
+          <div class="dp-text" id="nd-rationale"></div>
+        </div>
+        <div class="dp-section" id="nd-superseded-wrap" style="display:none">
+          <div class="dp-section-label" style="color:var(--text-dim)">Superseded by</div>
+          <div class="dp-text" id="nd-superseded-by" style="color:var(--text-dim);font-style:italic"></div>
+        </div>
+      </div>
+      <div class="dp-footer">
+        <button class="btn btn-ghost btn-sm" style="flex:1" onclick="exportNodeMd()">↓ ADR</button>
+        <button class="btn btn-ghost btn-sm" style="flex:1" onclick="highlightConnected()">Show connections</button>
+      </div>
+    </div>
+
+    <!-- Edge detail panel -->
+    <div class="detail-panel" id="edge-detail" style="top:auto;bottom:60px">
+      <div class="dp-header">
+        <div class="dp-title" id="ed-title" style="color:var(--red)">⚡ Contradiction</div>
+        <button class="dp-close" onclick="closeEdgeDetail()">×</button>
+      </div>
+      <div class="dp-body">
+        <div class="dp-row"><span class="dp-key">Type</span><span class="dp-val" id="ed-type"></span></div>
+        <div class="dp-section">
+          <div class="dp-section-label">Explanation</div>
+          <div class="dp-text" id="ed-explanation"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="graph-legend">
+      <div class="legend-section">
+        <div class="legend-heading">Node type</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#3B82F6"></div>Architectural</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#10B981"></div>Technical</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#8B5CF6"></div>Product</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#F59E0B"></div>Constraint</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#9CA3AF;opacity:.5"></div><span style="opacity:.6;text-decoration:line-through">Superseded</span></div>
+      </div>
+      <div class="legend-section" style="border-top:1px solid var(--border);padding-top:7px">
+        <div class="legend-heading">Edge type</div>
+        <div class="legend-item"><div class="legend-line" style="background:#3B82F6"></div>Supersedes</div>
+        <div class="legend-item"><div class="legend-line" style="background:#EF4444"></div>Contradicts</div>
+        <div class="legend-item"><div class="legend-line-dashed"></div>Relates to</div>
+      </div>
     </div>
   </div>
 </main>
 
 <script>
-function showToast(msg) {
-  const t = document.getElementById('toast'); t.textContent = msg;
-  t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2800);
-}
-
-const typeColors = { architectural:"#2563eb", technical:"#7c3aed", product:"#16a34a", constraint:"#dc2626", superseded:"#d97706" };
+// ── State ────────────────────────────────────────────────────────────────────
+let allNodes = [];
+let allEdges = [];
+let edgeLookup = {};   // source+target → explanation (from contradictions data)
 let cy = null;
-let selectedNode = null;
-let graphNodes = [];
+let selectedNodeData = null;
+let currentView = 'contradictions';
 let REPO_OWNER = '';
 let REPO_NAME = '';
 
-const cyStyles = [
-  { selector: 'node', style: { 'background-color': 'data(fillColor)', 'background-opacity': 0.15, 'border-color': 'data(fillColor)', 'border-width': 2.5, 'label': 'data(label)', 'text-wrap': 'wrap', 'text-max-width': '90px', 'font-family': 'Geist, sans-serif', 'font-size': '10px', 'font-weight': '500', 'color': '#1a1917', 'text-valign': 'bottom', 'text-halign': 'center', 'text-margin-y': '6px', 'width': 'data(size)', 'height': 'data(size)', 'cursor': 'pointer' } },
-  { selector: 'node[type="architectural"]', style: { 'background-color': '#2563eb', 'background-opacity': 0.12, 'border-color': '#2563eb', 'border-width': 2.5 } },
-  { selector: 'node[type="technical"]', style: { 'background-color': '#7c3aed', 'background-opacity': 0.12, 'border-color': '#7c3aed', 'border-width': 2.5 } },
-  { selector: 'node[type="product"]', style: { 'background-color': '#16a34a', 'background-opacity': 0.12, 'border-color': '#16a34a', 'border-width': 2.5 } },
-  { selector: 'node[type="constraint"]', style: { 'background-color': '#dc2626', 'background-opacity': 0.15, 'border-color': '#dc2626', 'border-width': 3.5, 'font-weight': '700' } },
-  { selector: 'node[type="superseded"]', style: { 'background-color': '#d97706', 'background-opacity': 0.08, 'border-color': '#d97706', 'border-width': 1.5, 'border-style': 'dashed', 'color': '#a8a29e', 'font-style': 'italic' } },
-  { selector: 'node:selected', style: { 'border-width': 4, 'background-opacity': 0.25 } },
-  { selector: 'node.hovered', style: { 'border-width': 3.5, 'background-opacity': 0.20 } },
-  { selector: 'node.faded', style: { 'background-opacity': 0.04, 'border-opacity': 0.15, 'color': '#d4d0ca' } },
-  { selector: 'node.highlighted', style: { 'border-width': 4, 'background-opacity': 0.25 } },
-  { selector: 'node.dimmed', style: { 'opacity': 0.2 } },
-  { selector: 'edge', style: { 'width': 1.5, 'line-color': '#e5e7eb', 'target-arrow-color': '#e5e7eb', 'target-arrow-shape': 'triangle', 'curve-style': 'bezier', 'arrow-scale': 0.8 } },
-  { selector: 'edge[type="supersedes"]', style: { 'width': 2, 'line-color': '#d97706', 'target-arrow-color': '#d97706', 'line-style': 'solid' } },
-  { selector: 'edge[type="related"]', style: { 'line-style': 'dashed', 'line-color': '#d4d0ca', 'target-arrow-shape': 'none' } },
-  { selector: 'edge[type="enables"]', style: { 'line-color': '#2563eb', 'target-arrow-color': '#2563eb', 'line-opacity': 0.5 } },
-  { selector: 'edge[type="uses"]', style: { 'line-color': '#2563eb', 'target-arrow-color': '#2563eb' } },
-  { selector: 'edge.dimmed', style: { 'opacity': 0.1 } },
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+const TYPE_COLORS = {
+  architectural: '#3B82F6',
+  technical:     '#10B981',
+  product:       '#8B5CF6',
+  constraint:    '#F59E0B',
+  superseded:    '#9CA3AF',
+};
+
+const TYPE_NORM = {
+  architectural:'architectural', infrastructure:'architectural', architecture:'architectural', deployment:'architectural',
+  technical:'technical', 'data-storage':'technical', data_storage:'technical', database:'technical',
+  framework:'technical', security:'technical', testing:'technical', 'async-processing':'technical',
+  'api-design':'technical', 'query-strategy':'technical',
+  product:'product', feature:'product', business:'product',
+  constraint:'constraint', limitation:'constraint',
+};
+
+function normalizeType(t) {
+  return TYPE_NORM[(t || '').toLowerCase().trim()] || 'technical';
+}
+
+function truncate(s, n) {
+  return (s || '').length > n ? s.slice(0, n - 1) + '…' : (s || '');
+}
+
+function escHtml(v) {
+  return String(v || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Domain classification for contradiction view ──────────────────────────────
+const DOMAIN_RULES = [
+  { name: 'DATABASE & STORAGE',         keys: ['database','postgres','sqlite','oracle','dynamo','redis','duckdb','storage','dba','sql ','mongodb','cassandra','mysql','elasticsearch','db migration','schema'] },
+  { name: 'ARCHITECTURE & PATTERNS',    keys: ['monolith','microservice','graphql','grpc','rest api','monorepo','event sourcing','kafka','rabbitmq','cqrs','service mesh','message','api gateway','decompos'] },
+  { name: 'INFRASTRUCTURE & DEPLOY',    keys: ['kubernetes','docker','ecs','lambda','aws','cloud','terraform','deploy','k8s','fargate','ec2','s3','azure','gcp','serverless','container','helm','ci/cd','pipeline','jenkins'] },
+  { name: 'AUTH & SECURITY',            keys: ['auth','jwt','api key','oauth','cognito','saml','mfa','login','session','token','sso','ldap','tls','ssl','certificate','rbac','identity','secret'] },
+  { name: 'MONITORING & OBSERVABILITY', keys: ['datadog','prometheus','opentelemetry','grafana','monitoring','observ','metric','logging','tracing','alert','pagerduty','splunk','elk','kibana','apm'] },
 ];
 
-async function loadGraph() {
-  try {
-    // Load repo info for source links
-    try {
-      const stats = await fetch('/api/stats').then(r => r.json());
-      REPO_OWNER = stats.repo_owner || '';
-      REPO_NAME = stats.repo_name || '';
-    } catch (_) {}
+function classifyPairDomain(labelA, labelB) {
+  const text = (labelA + ' ' + labelB).toLowerCase();
+  for (const rule of DOMAIN_RULES) {
+    if (rule.keys.some(k => text.includes(k))) return rule.name;
+  }
+  return 'OTHER';
+}
 
-    const data = await fetch('/api/graph').then(r => r.json());
-    graphNodes = data.nodes || [];
-    const links = data.edges || [];
+// ── Contradiction view: preset layout with domain clusters ────────────────────
+function computeContradictionPositions(nodes, edges) {
+  const DOMAIN_ORDER = [
+    'DATABASE & STORAGE',
+    'ARCHITECTURE & PATTERNS',
+    'INFRASTRUCTURE & DEPLOY',
+    'AUTH & SECURITY',
+    'MONITORING & OBSERVABILITY',
+    'OTHER',
+  ];
 
-    const cyNodes = graphNodes.map(n => ({
-      data: {
-        id: String(n.id),
-        label: n.label && n.label.length > 20 ? n.label.substring(0, 20) + '…' : (n.label || ''),
-        fullLabel: n.label,
-        type: n.type,
-        confidence: n.confidence,
-        source: n.source_type || n.source || 'manual',
-        sourcePr: n.source_pr || null,
-        sourceUrl: n.source_url || null,
-        date: n.date,
-        rationale: n.rationale,
-        overrides: n.overrides || null,
-        size: 40 + ((n.confidence || 0.8) * 30),
-        fillColor: typeColors[n.type] || '#6b7280',
+  const nodeById = {};
+  nodes.forEach(n => { nodeById[String(n.id)] = n; });
+
+  // Classify each edge into a domain group
+  const groups = {};
+  DOMAIN_ORDER.forEach(d => { groups[d] = []; });
+
+  edges.forEach(e => {
+    const src = nodeById[String(e.source)];
+    const tgt = nodeById[String(e.target)];
+    const domain = classifyPairDomain(src ? src.label : '', tgt ? tgt.label : '');
+    groups[domain].push({ source: String(e.source), target: String(e.target), type: e.type || 'related' });
+  });
+
+  // Layout constants
+  const LEFT_X  = 180;   // center of winner/left column
+  const RIGHT_X = 520;   // center of loser/right column
+  const LBL_X   = 18;    // section label left-aligned x
+  const ROW_H   = 100;   // vertical gap between pairs in a section
+  const SEC_TOP = 36;    // gap from section label to first pair
+  const SEC_BOT = 56;    // gap from last pair to next section label
+  let   curY    = 50;
+
+  const positions    = {};  // nodeId → {x, y}
+  const positionedIds = new Set();
+  const sectionLabels = []; // {id, label, x, y}
+
+  for (const domainName of DOMAIN_ORDER) {
+    const pairs = groups[domainName];
+    if (!pairs.length) continue;
+
+    const lblId = 'sect-' + domainName.replace(/\W+/g, '');
+    sectionLabels.push({ id: lblId, label: domainName, x: LBL_X, y: curY });
+    curY += SEC_TOP;
+
+    for (const pair of pairs) {
+      // Only assign position if not already placed from a prior pair
+      if (!positionedIds.has(pair.source)) {
+        positions[pair.source] = { x: LEFT_X, y: curY };
+        positionedIds.add(pair.source);
       }
-    }));
-    const cyEdges = links.map((l, i) => ({
-      data: { id: `e${i}`, source: String(l.source), target: String(l.target), type: l.type }
-    }));
+      if (!positionedIds.has(pair.target)) {
+        positions[pair.target] = { x: RIGHT_X, y: curY };
+        positionedIds.add(pair.target);
+      }
+      curY += ROW_H;
+    }
+    curY += SEC_BOT;
+  }
 
-    if (!cyNodes.length) {
-      document.getElementById('cy').innerHTML = '<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;color:#a8a29e"><div style="font-size:48px;margin-bottom:12px;opacity:0.4">⬡</div><div style="font-family:Fraunces,serif;font-size:18px;font-weight:600;color:#78716c">No decisions yet</div><div style="font-size:12px;margin-top:6px">Run <code>smm seed-graph</code> or <code>smm capture run</code></div></div>';
-      return;
+  // Any leftover connected nodes not yet placed (e.g. from multi-pair nodes)
+  nodes.forEach(n => {
+    if (!positionedIds.has(String(n.id))) {
+      positions[String(n.id)] = { x: LEFT_X, y: curY };
+      curY += ROW_H;
+    }
+  });
+
+  return { positions, sectionLabels };
+}
+
+// ── Cytoscape style sheet ─────────────────────────────────────────────────────
+const CY_STYLES = [
+  { selector: 'node', style: {
+      'background-color': 'data(color)',
+      'shape':      'data(shape)',
+      'width':      'data(w)',
+      'height':     'data(h)',
+      'label':      'data(label)',
+      'text-wrap':  'wrap', 'text-max-width': 'data(textMaxW)',
+      'font-family': 'Geist,system-ui,sans-serif',
+      'font-size':  'data(fontSize)', 'font-weight': '500',
+      'color': '#ffffff', 'text-outline-color': 'data(color)', 'text-outline-width': 2,
+      'text-valign': 'center', 'text-halign': 'center',
+      'border-width': 0, 'cursor': 'pointer',
+  }},
+  // Type overrides
+  { selector: 'node[type="architectural"]', style: { 'background-color': '#3B82F6' }},
+  { selector: 'node[type="technical"]',     style: { 'background-color': '#10B981' }},
+  { selector: 'node[type="product"]',       style: { 'background-color': '#8B5CF6' }},
+  { selector: 'node[type="constraint"]',    style: { 'background-color': '#F59E0B' }},
+  { selector: 'node[type="superseded"]',    style: {
+      'background-color': '#9CA3AF', 'opacity': 0.45,
+      'font-style': 'italic',
+  }},
+  // Section label nodes (contradiction view domain headers)
+  { selector: 'node.section-label', style: {
+      'background-opacity': 0,
+      'border-width': 0,
+      'color': '#78716c',
+      'font-size': '10px', 'font-weight': '700',
+      'text-outline-width': 0,
+      'text-valign': 'center', 'text-halign': 'left',
+      'events': 'no',
+  }},
+  // Sprint label ghost nodes
+  { selector: 'node.sprint-label', style: {
+      'background-opacity': 0.06, 'background-color': '#e0e0e0',
+      'border-width': 1, 'border-color': '#e0e0e0',
+      'color': '#9ca3af', 'font-size': '9px', 'font-weight': '700',
+      'text-outline-width': 0,
+      'events': 'no',
+  }},
+  // Interactions
+  { selector: 'node:selected',   style: { 'border-width': 3, 'border-color': '#ffffff', 'opacity': 1 }},
+  { selector: 'node.hovered',    style: { 'border-width': 2, 'border-color': '#ffffff' }},
+  { selector: 'node.dimmed',     style: { 'opacity': 0.12 }},
+  // Edges
+  { selector: 'edge', style: {
+      'width': 1.5, 'line-color': '#cbd5e1',
+      'target-arrow-color': '#cbd5e1', 'target-arrow-shape': 'triangle',
+      'curve-style': 'bezier', 'arrow-scale': 0.7,
+  }},
+  { selector: 'edge[type="supersedes"]', style: {
+      'width': 2, 'line-color': '#3B82F6',
+      'target-arrow-color': '#3B82F6', 'line-style': 'solid', 'target-arrow-shape': 'triangle',
+  }},
+  { selector: 'edge[type="contradicts"]', style: {
+      'width': 2.5, 'line-color': '#EF4444',
+      'target-arrow-color': '#EF4444', 'line-style': 'solid', 'target-arrow-shape': 'none',
+      'source-arrow-shape': 'none',
+  }},
+  { selector: 'edge[type="related"]', style: {
+      'line-style': 'dashed', 'line-color': '#9ca3af',
+      'target-arrow-shape': 'none', 'width': 1,
+  }},
+  { selector: 'edge.dimmed', style: { 'opacity': 0.06 }},
+  { selector: 'edge.highlighted', style: { 'width': 3, 'opacity': 1 }},
+];
+
+// ── View management ───────────────────────────────────────────────────────────
+function switchView(view) {
+  currentView = view;
+  document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById('vbtn-' + view);
+  if (btn) btn.classList.add('active');
+  renderView();
+}
+
+function renderView() {
+  closeNodeDetail();
+  closeEdgeDetail();
+
+  let nodes, edges;
+
+  if (currentView === 'contradictions') {
+    const connectedIds = new Set(allEdges.flatMap(e => [String(e.source), String(e.target)]));
+    nodes = allNodes.filter(n => connectedIds.has(String(n.id)));
+    edges = allEdges;
+  } else {
+    nodes = allNodes;
+    edges = allEdges;
+  }
+
+  // For contradictions view, compute preset positions first so buildCy can inject section labels
+  let contraLayout = null;
+  if (currentView === 'contradictions') {
+    const { positions, sectionLabels } = computeContradictionPositions(nodes, edges);
+    contraLayout = { positions, sectionLabels };
+  }
+
+  const layout = getLayout(currentView, nodes, contraLayout);
+  buildCy(nodes, edges, layout, contraLayout);
+  updateStats(nodes.length, edges.length);
+
+  // Sprint header
+  document.getElementById('sprint-header').style.display = 'none';
+  if (currentView === 'sprints' && cy) {
+    cy.ready(() => buildSprintHeader(nodes));
+  }
+}
+
+function getLayout(view, nodes, contraLayout) {
+  if (view === 'contradictions') {
+    return {
+      name: 'preset',
+      positions: n => {
+        const p = contraLayout && contraLayout.positions[n.id()];
+        return p || { x: 0, y: 0 };
+      },
+      animate: false,
+      padding: 60,
+    };
+  }
+  if (view === 'sprints') {
+    return {
+      name: 'preset',
+      positions: computeSprintPositions(nodes),
+      animate: false,
+      padding: 50,
+    };
+  }
+  // 'all' — dagre LR: left-to-right flow (Sprint 1 left → Sprint 20 right)
+  return {
+    name: 'dagre',
+    rankDir: 'LR',
+    nodeSep: 40,
+    rankSep: 80,
+    animate: false,
+    padding: 40,
+    fit: true,
+  };
+}
+
+// ── Build Cytoscape ───────────────────────────────────────────────────────────
+function buildCy(nodes, edges, layout, contraLayout) {
+  if (!nodes.length) {
+    document.getElementById('cy').innerHTML =
+      '<div class="empty-graph"><div class="empty-graph-icon">⬡</div>' +
+      '<div class="empty-graph-title">No decisions yet</div>' +
+      '<div class="empty-graph-desc">Run <code>smm add-decision</code> to get started</div></div>';
+    return;
+  }
+
+  const isContraView = currentView === 'contradictions';
+
+  const cyNodes = nodes.map(n => {
+    const isSuperseded = n.superseded || false;
+    const nodeType = isSuperseded ? 'superseded' : normalizeType(n.type || 'technical');
+    const rawConf = parseFloat(n.confidence || 0.80);
+    const conf = rawConf > 1 ? rawConf / 100 : rawConf;
+
+    // Shape / dimensions vary by view
+    let w, h, shape, textMaxW, fontSize;
+    if (isContraView) {
+      w = 200; h = 60; shape = 'round-rectangle'; textMaxW = '186px'; fontSize = '10px';
+    } else if (currentView === 'all') {
+      const s = Math.round(14 + conf * 12);
+      w = s; h = s; shape = 'ellipse'; textMaxW = '110px'; fontSize = '9px';
+    } else {
+      // sprints
+      const s = Math.round(28 + conf * 30);
+      w = s; h = s; shape = 'ellipse'; textMaxW = '110px'; fontSize = '9px';
     }
 
-    if (cy) { cy.destroy(); cy = null; }
-    cy = cytoscape({
-      container: document.getElementById('cy'),
-      elements: { nodes: cyNodes, edges: cyEdges },
-      style: cyStyles,
-      layout: { name: 'cose', animate: false, padding: 30, nodeRepulsion: 8000 },
-      userZoomingEnabled: true, userPanningEnabled: true, boxSelectionEnabled: false,
-    });
+    const labelLen = isContraView ? 46 : (currentView === 'all' ? 22 : 32);
+    const label = truncate(n.label || '(untitled)', labelLen);
 
-    cy.on('tap', 'node', (e) => {
-      const n = e.target.data();
-      showNodeDetail(n);
-      cy.nodes().removeClass('dimmed'); cy.edges().removeClass('dimmed');
-      const connected = e.target.connectedEdges().connectedNodes();
-      cy.nodes().not(connected).not(e.target).addClass('dimmed');
+    return {
+      data: {
+        id:           String(n.id),
+        label,
+        fullLabel:    n.label || '',
+        type:         nodeType,
+        confidence:   conf,
+        source:       n.source_type || 'manual',
+        sourcePr:     n.source_pr   || null,
+        date:         n.date        || '',
+        rationale:    n.rationale   || '',
+        overrides:    n.overrides   || null,
+        superseded:   isSuperseded,
+        supersededBy: n.superseded_by  || '',
+        supersededAt: n.superseded_at  || '',
+        w, h, shape, textMaxW, fontSize,
+        size: w,  // keep for backward compat
+        color: TYPE_COLORS[nodeType] || '#9CA3AF',
+      }
+    };
+  });
+
+  // Inject section label ghost nodes for contradiction view
+  if (isContraView && contraLayout && contraLayout.sectionLabels) {
+    contraLayout.sectionLabels.forEach(lbl => {
+      cyNodes.push({
+        data: {
+          id: lbl.id,
+          label: lbl.label,
+          w: 320, h: 28, shape: 'rectangle',
+          textMaxW: '310px', fontSize: '10px',
+          color: 'transparent', type: '',
+          fullLabel: '', rationale: '', confidence: 0,
+        },
+        classes: 'section-label',
+        position: { x: lbl.x, y: lbl.y },
+        locked: true,
+        grabbable: false,
+        selectable: false,
+      });
     });
-    cy.on('tap', (e) => {
-      if (e.target === cy) { closeNodeDetail(); cy.nodes().removeClass('dimmed'); cy.edges().removeClass('dimmed'); }
-    });
-    cy.on('mouseover', 'node', (e) => { e.target.addClass('hovered'); });
-    cy.on('mouseout', 'node', (e) => { e.target.removeClass('hovered'); });
-  } catch (e) {
-    console.warn('Graph load failed:', e);
   }
+
+  // Add sprint ghost nodes for sprint timeline view
+  if (currentView === 'sprints') {
+    const EPOCH = Date.UTC(2025, 8, 1);
+    const SPRINT_DAYS = 2.8;
+    const SPRINT_W = 170;
+    const NODE_H = 46;
+    const sprintNums = new Set();
+    nodes.forEach(n => {
+      if (n.date) {
+        const d = new Date(n.date + 'T00:00:00Z');
+        const dayOffset = (d.getTime() - EPOCH) / 86400000;
+        const sprint = Math.max(1, Math.min(20, Math.floor(dayOffset / SPRINT_DAYS) + 1));
+        sprintNums.add(sprint);
+      }
+    });
+    sprintNums.forEach(s => {
+      cyNodes.push({
+        data: { id: 'sprint-lbl-' + s, label: 'Sprint ' + s, type: '', size: 50,
+                w: 50, h: 50, shape: 'rectangle', textMaxW: '60px', fontSize: '9px',
+                color: '#f0f0ee' },
+        classes: 'sprint-label',
+        position: { x: (s - 1) * SPRINT_W + 56, y: -30 },
+        locked: true,
+        grabbable: false,
+        selectable: false,
+      });
+    });
+  }
+
+  const cyEdges = edges
+    .filter(e => nodes.some(n => String(n.id) === String(e.source)) &&
+                 nodes.some(n => String(n.id) === String(e.target)))
+    .map((e, i) => ({
+      data: {
+        id:          'e' + i,
+        source:      String(e.source),
+        target:      String(e.target),
+        type:        e.type   || 'related',
+        explanation: e.explanation || e.label || '',
+      }
+    }));
+
+  if (cy) { cy.destroy(); cy = null; }
+
+  cy = cytoscape({
+    container: document.getElementById('cy'),
+    elements:  { nodes: cyNodes, edges: cyEdges },
+    style:     CY_STYLES,
+    layout,
+    userZoomingEnabled:   true,
+    userPanningEnabled:   true,
+    boxSelectionEnabled:  false,
+    minZoom: 0.05,
+    maxZoom: 4,
+  });
+
+  cy.on('tap', 'node', e => {
+    if (e.target.hasClass('sprint-label') || e.target.hasClass('section-label')) return;
+    showNodeDetail(e.target.data());
+    highlightNeighbourhood(e.target);
+  });
+  cy.on('tap', 'edge', e => {
+    showEdgeDetail(e.target.data());
+  });
+  cy.on('tap', e => {
+    if (e.target === cy) {
+      closeNodeDetail();
+      closeEdgeDetail();
+      cy.nodes().removeClass('dimmed');
+      cy.edges().removeClass('dimmed');
+    }
+  });
+  cy.on('mouseover', 'node', e => {
+    const n = e.target;
+    if (n.hasClass('sprint-label') || n.hasClass('section-label')) return;
+    n.addClass('hovered');
+    const d = n.data();
+    const tip = document.getElementById('node-tooltip');
+    if (!tip) return;
+    const rp = n.renderedPosition();
+    const cRect = document.getElementById('cy').getBoundingClientRect();
+    tip.innerHTML = '<strong>' + escHtml(d.fullLabel || d.label) + '</strong>'
+      + (d.rationale ? '<span>' + escHtml(d.rationale.slice(0, 180)) + (d.rationale.length > 180 ? '…' : '') + '</span>' : '');
+    const tipX = cRect.left + rp.x + 16;
+    const tipY = cRect.top  + rp.y - 8;
+    // Clamp to viewport
+    tip.style.display = 'block';
+    const tw = tip.offsetWidth;
+    const vpW = window.innerWidth;
+    tip.style.left = Math.min(tipX, vpW - tw - 12) + 'px';
+    tip.style.top  = tipY + 'px';
+  });
+  cy.on('mouseout', 'node', e => {
+    e.target.removeClass('hovered');
+    const tip = document.getElementById('node-tooltip');
+    if (tip) tip.style.display = 'none';
+  });
 }
 
+// ── Sprint layout helper ──────────────────────────────────────────────────────
+function computeSprintPositions(nodes) {
+  const EPOCH = Date.UTC(2025, 8, 1); // Sep 1 2025
+  const SPRINT_DAYS = 2.8;
+  const SPRINT_W = 170;
+  const NODE_H = 46;
+  const COLS = 2;
+  const counters = {};
+  const positions = {};
+
+  nodes.forEach(n => {
+    let sprint = 1;
+    if (n.date) {
+      const d = new Date(n.date + 'T00:00:00Z');
+      const dayOffset = (d.getTime() - EPOCH) / 86400000;
+      sprint = Math.max(1, Math.min(20, Math.floor(dayOffset / SPRINT_DAYS) + 1));
+    }
+    const idx = counters[sprint] || 0;
+    counters[sprint] = idx + 1;
+    const col = idx % COLS;
+    const row = Math.floor(idx / COLS);
+    positions[String(n.id)] = {
+      x: (sprint - 1) * SPRINT_W + col * 76 + 20,
+      y: row * NODE_H + 30,
+    };
+  });
+  return positions;
+}
+
+function buildSprintHeader(nodes) {
+  if (!cy) return;
+  // not needed — sprint labels are cytoscape nodes
+}
+
+// ── Neighbourhood highlight ───────────────────────────────────────────────────
+function highlightNeighbourhood(node) {
+  if (!cy) return;
+  cy.nodes().removeClass('dimmed');
+  cy.edges().removeClass('dimmed');
+  const hood = node.closedNeighborhood();
+  cy.nodes().not(hood).addClass('dimmed');
+  cy.edges().not(hood).addClass('dimmed');
+}
+
+// ── Node detail ───────────────────────────────────────────────────────────────
 function showNodeDetail(d) {
-  selectedNode = d;
-  document.getElementById('nd-title').textContent = d.fullLabel || d.label;
+  if (!d) return;
+  selectedNodeData = d;
 
-  const typeBadge = document.getElementById('nd-type-badge');
-  typeBadge.textContent = d.type;
-  typeBadge.className = `tag tag-${d.type}`;
+  document.getElementById('nd-title').textContent = d.fullLabel || d.label || '(untitled)';
 
-  const confPill = document.getElementById('nd-conf-pill');
-  confPill.textContent = d.confidence;
-  confPill.className = `confidence-pill ${d.confidence >= 0.85 ? 'conf-high' : d.confidence >= 0.70 ? 'conf-mid' : 'conf-low'}`;
+  const tb = document.getElementById('nd-type-badge');
+  tb.textContent = d.type || 'technical';
+  tb.className = 'tag tag-' + (d.type || 'technical');
 
-  document.getElementById('nd-date').textContent = d.date || '—';
+  const cp = document.getElementById('nd-conf-pill');
+  const conf = parseFloat(d.confidence || 0);
+  cp.textContent = Math.round((conf > 1 ? conf / 100 : conf) * 100) + '%';
+  cp.className = 'conf-pill ' + (conf >= 0.85 ? 'conf-high' : conf >= 0.70 ? 'conf-mid' : 'conf-low');
 
-  const sourceDisplay = document.getElementById('nd-source-display');
-  const sourceBtn = document.getElementById('nd-source-btn');
-  if (d.sourcePr) {
-    sourceDisplay.innerHTML = `<span style="color:var(--purple);font-weight:500">PR #${d.sourcePr}</span>`;
-    sourceBtn.style.display = 'block';
-    sourceBtn.textContent = `↗ PR #${d.sourcePr}`;
+  document.getElementById('nd-date').textContent   = d.date   || '—';
+  document.getElementById('nd-source').textContent = (d.sourcePr ? 'PR #' + d.sourcePr : (d.source || 'manual')).replace(/_/g, ' ');
+
+  const ratEl = document.getElementById('nd-rationale');
+  ratEl.textContent = (d.rationale || '').slice(0, 280) || '—';
+  document.getElementById('nd-rationale-wrap').style.display = d.rationale ? 'block' : 'none';
+
+  const supWrap = document.getElementById('nd-superseded-wrap');
+  if (d.superseded && d.supersededBy) {
+    supWrap.style.display = 'block';
+    document.getElementById('nd-superseded-by').textContent =
+      d.supersededBy + (d.supersededAt ? ' — ' + d.supersededAt : '');
   } else {
-    sourceDisplay.textContent = d.source ? d.source.replace(/_/g, ' ') : '—';
-    sourceBtn.style.display = 'none';
+    supWrap.style.display = 'none';
   }
 
-  document.getElementById('nd-rationale').textContent = d.rationale || '—';
-  const ow = document.getElementById('nd-overrides-wrap');
-  if (d.overrides) { ow.style.display = 'block'; document.getElementById('nd-overrides').textContent = '→ ' + d.overrides; }
-  else ow.style.display = 'none';
   document.getElementById('node-detail').classList.add('visible');
-  if (cy) { cy.nodes().unselect(); cy.nodes(`[id="${String(d.id)}"]`).select(); }
-}
-
-function openSource() {
-  if (!selectedNode) return;
-  if (selectedNode.sourceUrl) {
-    window.open(selectedNode.sourceUrl, '_blank');
-  } else if (selectedNode.sourcePr) {
-    const url = `https://github.com/${REPO_OWNER}/${REPO_NAME}/pull/${selectedNode.sourcePr}`;
-    window.open(url, '_blank');
-  }
+  if (cy) { cy.nodes().unselect(); cy.nodes(`[id="${d.id}"]`).select(); }
 }
 
 function closeNodeDetail() {
-  selectedNode = null;
+  selectedNodeData = null;
   document.getElementById('node-detail').classList.remove('visible');
   if (cy) cy.nodes().unselect();
 }
 
-function downloadCurrentNode() {
-  if (!selectedNode) return;
-  const date = new Date().toISOString().slice(0, 10);
-  const md = `# ADR: ${selectedNode.label}\n\n**Date:** ${selectedNode.date || date}\n**Type:** ${selectedNode.type}\n**Confidence:** ${selectedNode.confidence}\n\n## Rationale\n\n${selectedNode.rationale || ''}\n\n---\n*Generated by CaaS*\n`;
-  const blob = new Blob([md], { type: 'text/markdown' });
-  const url = URL.createObjectURL(blob); const a = document.createElement('a');
-  a.href = url; a.download = `adr-${selectedNode.label.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}.md`;
-  a.click(); URL.revokeObjectURL(url);
+// ── Edge detail ───────────────────────────────────────────────────────────────
+function showEdgeDetail(d) {
+  const isContradict = d.type === 'contradicts';
+  const isSupersedes = d.type === 'supersedes';
+  const titleEl = document.getElementById('ed-title');
+  titleEl.textContent = isContradict ? '⚡ Contradiction' : isSupersedes ? '→ Supersedes' : '↔ Relates to';
+  titleEl.style.color = isContradict ? 'var(--red)' : isSupersedes ? 'var(--accent)' : 'var(--text-mid)';
+
+  document.getElementById('ed-type').textContent = (d.type || 'related').replace(/_/g, ' ');
+
+  const srcNode = allNodes.find(n => String(n.id) === String(d.source));
+  const tgtNode = allNodes.find(n => String(n.id) === String(d.target));
+  const srcTitle = srcNode ? truncate(srcNode.label || '', 50) : d.source;
+  const tgtTitle = tgtNode ? truncate(tgtNode.label || '', 50) : d.target;
+
+  let explanation = d.explanation || '';
+  if (!explanation && isContradict) {
+    explanation = `"${srcTitle}" contradicts "${tgtTitle}"`;
+  } else if (!explanation && isSupersedes) {
+    explanation = `"${srcTitle}" supersedes "${tgtTitle}"`;
+  }
+  document.getElementById('ed-explanation').textContent = explanation.slice(0, 400) || '—';
+
+  document.getElementById('edge-detail').classList.add('visible');
 }
 
-function runQuery() {
-  const q = document.getElementById('graph-query').value.toLowerCase().trim();
-  if (!q || !cy) return;
+function closeEdgeDetail() {
+  document.getElementById('edge-detail').classList.remove('visible');
+}
+
+// ── Stats bar ─────────────────────────────────────────────────────────────────
+function updateStats(nodeCount, edgeCount) {
+  const label = {
+    contradictions: 'Contradiction focus',
+    all:            'All decisions',
+    sprints:        'Sprint timeline',
+  }[currentView] || '';
+  document.getElementById('graph-stats').textContent =
+    `${nodeCount} node${nodeCount !== 1 ? 's' : ''} · ${edgeCount} edge${edgeCount !== 1 ? 's' : ''}  ·  ${label}`;
+}
+
+// ── Search ────────────────────────────────────────────────────────────────────
+function runQuery(q) {
+  if (!cy || !q) {
+    if (cy) { cy.nodes().style('opacity', 1); cy.edges().style('opacity', 0.6); }
+    return;
+  }
+  const ql = q.toLowerCase();
   cy.nodes().forEach(node => {
     const d = node.data();
-    const match = d.label.toLowerCase().includes(q) || (d.rationale || '').toLowerCase().includes(q) || d.type.toLowerCase().includes(q);
-    node.style('opacity', match ? 1 : 0.2);
+    const match = (d.fullLabel || d.label || '').toLowerCase().includes(ql) ||
+                  (d.rationale || '').toLowerCase().includes(ql) ||
+                  (d.type || '').toLowerCase().includes(ql);
+    node.style('opacity', match ? 1 : 0.12);
   });
-  cy.edges().style('opacity', 0.2);
-  const match = graphNodes.find(n => n.label.toLowerCase().includes(q));
-  if (match) showNodeDetail(match);
+  cy.edges().style('opacity', 0.12);
+
+  const first = allNodes.find(n =>
+    (n.label || '').toLowerCase().includes(ql) ||
+    (n.rationale || '').toLowerCase().includes(ql)
+  );
+  if (first) {
+    const cyNode = cy.nodes(`[id="${String(first.id)}"]`);
+    if (cyNode.length) {
+      cy.animate({ fit: { eles: cyNode, padding: 80 }, duration: 350 });
+      showNodeDetail(cyNode.data());
+    }
+  }
 }
 
+document.getElementById('graph-query').addEventListener('input', e => runQuery(e.target.value.trim()));
 document.getElementById('graph-query').addEventListener('keydown', e => {
-  if (e.key === 'Enter') runQuery();
   if (e.key === 'Escape') {
-    if (cy) { cy.nodes().style('opacity', 1); cy.edges().style('opacity', 1); }
-    closeNodeDetail(); document.getElementById('graph-query').value = '';
+    document.getElementById('graph-query').value = '';
+    runQuery('');
+    closeNodeDetail();
   }
 });
 
+// ── Export ────────────────────────────────────────────────────────────────────
+function exportNodeMd() {
+  if (!selectedNodeData) return;
+  const d = selectedNodeData;
+  const date = new Date().toISOString().slice(0, 10);
+  const md = `# ADR: ${d.fullLabel || d.label}\n\n**Date:** ${d.date || date}\n**Type:** ${d.type}\n**Confidence:** ${Math.round((d.confidence > 1 ? d.confidence / 100 : d.confidence) * 100)}%\n\n## Rationale\n\n${d.rationale || ''}\n\n---\n*Generated by CaaS*\n`;
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(new Blob([md], { type: 'text/markdown' })),
+    download: 'adr-' + (d.fullLabel || d.label).toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40) + '.md',
+  });
+  a.click(); URL.revokeObjectURL(a.href);
+}
+
+function highlightConnected() {
+  if (!selectedNodeData || !cy) return;
+  const node = cy.nodes(`[id="${selectedNodeData.id}"]`);
+  if (node.length) highlightNeighbourhood(node);
+}
+
+// ── Zoom ──────────────────────────────────────────────────────────────────────
+function zoomIn()    { if (cy) cy.zoom({ level: cy.zoom() * 1.3, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } }); }
+function zoomOut()   { if (cy) cy.zoom({ level: cy.zoom() * 0.77, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } }); }
+function resetZoom() { if (cy) cy.fit(cy.nodes().not('.sprint-label, .section-label'), 40); }
+
+window.addEventListener('resize', () => { if (cy) cy.fit(cy.nodes().not('.sprint-label, .section-label'), 40); });
 document.addEventListener('keydown', e => {
   if ((e.key === 'f' || e.key === 'F') && document.activeElement.tagName !== 'INPUT') {
     const el = document.getElementById('cy');
     if (el && el.requestFullscreen) el.requestFullscreen();
   }
+  if (e.key === 'Escape' && document.activeElement.tagName !== 'INPUT') {
+    closeNodeDetail(); closeEdgeDetail();
+    if (cy) { cy.nodes().removeClass('dimmed'); cy.edges().removeClass('dimmed'); }
+  }
 });
 
-function zoomIn() { if (cy) cy.zoom({ level: cy.zoom() * 1.3, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } }); }
-function zoomOut() { if (cy) cy.zoom({ level: cy.zoom() * 0.77, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } }); }
-function resetZoom() { if (cy) cy.fit(undefined, 30); }
+// ── Boot ──────────────────────────────────────────────────────────────────────
+async function loadGraph() {
+  document.getElementById('graph-stats').textContent = 'loading…';
+  try {
+    const [data, stats] = await Promise.all([
+      fetch('/api/graph').then(r => r.json()),
+      fetch('/api/stats').then(r => r.json()).catch(() => ({})),
+    ]);
+    REPO_OWNER = stats.repo_owner || '';
+    REPO_NAME  = stats.repo_name  || '';
+    allNodes   = data.nodes || [];
+    allEdges   = data.edges || [];
+
+    if (!allNodes.length && !allEdges.length) {
+      document.getElementById('cy').innerHTML =
+        '<div class="empty-graph"><div class="empty-graph-icon">⬡</div>' +
+        '<div class="empty-graph-title">Graph is empty</div>' +
+        '<div class="empty-graph-desc">No decisions found in this project</div></div>';
+      document.getElementById('graph-stats').textContent = '0 nodes';
+      return;
+    }
+    renderView();
+  } catch (err) {
+    console.error('Graph load error:', err);
+    document.getElementById('graph-stats').textContent = 'Error loading graph';
+  }
+}
 
 window.addEventListener('load', loadGraph);
-window.addEventListener('resize', () => { if (cy) cy.fit(undefined, 30); });
 </script>
+
 <script>
 // Sidebar dynamic data
 (async function() {

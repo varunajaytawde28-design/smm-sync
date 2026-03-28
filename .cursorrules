@@ -11,7 +11,6 @@ Stack: python 3.11+, click, jinja2, tomllib (stdlib), filelock
 - No network calls in Weekend 1 scope
 - coordinator.py must work on macOS and Linux (POSIX-atomic os.rename)
 - state.json must be human-readable JSON, never binary
-- watcher.py and drift.py are STUBS ONLY — raise NotImplementedError
 
 ## Danger Zones (never touch without reason)
 - Do not use os.rename() across filesystems — only atomic within the same filesystem

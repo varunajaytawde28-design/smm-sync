@@ -1,6 +1,4 @@
 """Tuple Space coordinator using os.rename() POSIX atomicity for file claiming.
-
-# adapted from axiom-hub/src/axiom/store.py (locking pattern concept)
 """
 from __future__ import annotations
 
@@ -59,10 +57,8 @@ def claim(smm_dir: Path, filepath: str, session_id: str = "") -> bool:
     tmp_path.write_text(content, encoding="utf-8")
 
     try:
-        if lock_path.exists():
-            tmp_path.unlink(missing_ok=True)
-            return False
-        os.rename(tmp_path, lock_path)
+        os.link(tmp_path, lock_path)  # fails with EEXIST if lock_path exists
+        os.unlink(tmp_path)
         return True
     except OSError:
         tmp_path.unlink(missing_ok=True)

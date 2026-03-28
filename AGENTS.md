@@ -1,3 +1,5 @@
+# This is the canonical source of truth for AI agents working on this project.
+
 # AGENTS.md — smm-sync
 
 > Source of truth for this project. Edit this file directly.
@@ -33,7 +35,6 @@ smm-sync: Coordination layer for simultaneous AI agents working on the same code
 - coordinator.py os.rename() logic must not be touched
 - state.json must remain human-readable JSON
 - Every public function must have a docstring with input/output types
-- watcher.py and drift.py are STUBS ONLY
 
 ## Danger Zones
 
@@ -51,8 +52,6 @@ smm-sync: Coordination layer for simultaneous AI agents working on the same code
 - `coordinator.py`: Tuple Space: os.rename() atomic file claiming in .smm/locks/
 - `mcp_server.py`: MCP server with 4 tools: read_context, claim_file, release_file, refresh_context
 - `git_utils.py`: Pre-commit hook installation + git diff parsing
-- `watcher.py`: STUB: watchdog-based change detection (Month 1)
-- `drift.py`: STUB: semantic drift detection (Month 3)
 
 ## JIT Context Injection
 

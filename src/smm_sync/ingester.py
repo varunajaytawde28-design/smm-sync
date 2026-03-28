@@ -27,9 +27,9 @@ def _md5(text: str) -> str:
         text: Input string.
 
     Returns:
-        32-character hex string.
+        64-character hex string (SHA256 hash).
     """
-    return hashlib.md5(text.encode("utf-8")).hexdigest()
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def parse_agents_md(content: str) -> dict[str, Any]:

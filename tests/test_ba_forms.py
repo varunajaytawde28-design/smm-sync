@@ -33,22 +33,30 @@ def test_post_decisions_requires_rationale():
 
 
 def test_post_decisions_with_constraint_flag():
-    """POST /api/decisions with is_constraint=True is accepted (503 without API key)."""
+    """POST /api/decisions with is_constraint=True is accepted (no API key needed).
+
+    Bug 1 fix: endpoint now uses add_decision_local() which requires no API key.
+    Returns 200 on success or 500 if the graph client is unavailable in test env.
+    Never returns 503 (that status was removed with the API-key requirement).
+    """
     with patch.dict("os.environ", {"ANTHROPIC_API_KEY": ""}):
         r = client.post("/api/decisions", json={"title": "test", "rationale": "because", "is_constraint": True})
-        # Without API key it returns 503
-        assert r.status_code == 503
+        assert r.status_code != 503
 
 
-def test_post_decisions_returns_503_without_api_key():
-    """POST /api/decisions without ANTHROPIC_API_KEY returns 503."""
+def test_post_decisions_works_without_api_key():
+    """POST /api/decisions no longer requires ANTHROPIC_API_KEY (Bug 1 fix).
+
+    Uses add_decision_local() internally — zero API calls, no key needed.
+    Returns 200 or 500 (graph unavailable), never 503.
+    """
     with patch.dict("os.environ", {"ANTHROPIC_API_KEY": ""}):
         r = client.post("/api/decisions", json={"title": "test", "rationale": "because"})
-        assert r.status_code == 503
+        assert r.status_code != 503
 
 
 def test_post_constraint_creates_correctly():
-    """POST /api/decisions with is_constraint=True calls add_decision correctly."""
+    """POST /api/decisions with is_constraint=True validates body correctly."""
     with patch.dict("os.environ", {"ANTHROPIC_API_KEY": ""}):
         r = client.post("/api/decisions", json={
             "title": "Never do X",
@@ -56,16 +64,17 @@ def test_post_constraint_creates_correctly():
             "is_constraint": True,
             "type": "architectural"
         })
-        # Without API key it 503s — still validates body correctly
-        assert r.status_code == 503
+        # Valid body — must not be a schema error
+        assert r.status_code != 422
+        assert r.status_code != 503
 
 
 def test_post_decisions_default_values():
     """POST /api/decisions uses correct defaults for optional fields."""
     with patch.dict("os.environ", {"ANTHROPIC_API_KEY": ""}):
         r = client.post("/api/decisions", json={"title": "test", "rationale": "reason"})
-        # 503 because no API key, but body was valid (422 would mean schema error)
-        assert r.status_code != 422
+        # Body is valid — must not be a schema error or legacy API-key 503
+        assert r.status_code not in (422, 503)
 
 
 def test_post_decisions_with_alternatives():
@@ -77,7 +86,7 @@ def test_post_decisions_with_alternatives():
             "alternatives": ["FalkorDB", "Custom DB"],
             "type": "technical",
         })
-        assert r.status_code == 503
+        assert r.status_code not in (422, 503)
 
 
 def test_post_decisions_invalid_body():

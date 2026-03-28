@@ -24,7 +24,20 @@
       "Bash(git stash:*)",
       "Bash(lsof:*)",
       "Bash(kill 56939:*)",
-      "Bash(do echo:*)"
+      "Bash(do echo:*)",
+      "mcp__smm-sync__add_decision",
+      "Bash(smm add-decision:*)",
+      "Read(//Users/varunajaytawde/projects/smm-sync/**)",
+      "Bash(chmod +x /tmp/inject_decisions.sh)",
+      "Bash(bash:*)",
+      "Bash(ps eww:*)",
+      "Bash(for f in main.py models.py auth.py requirements.txt)",
+      "Bash(do)",
+      "Read(//Users/varunajaytawde/projects/fintrack-demo/**)",
+      "Bash(done)",
+      "Bash(ps:*)",
+      "Bash(pkill:*)",
+      "Bash(smm discover-edges:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

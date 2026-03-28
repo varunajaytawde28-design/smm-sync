@@ -227,7 +227,6 @@ class GitHubCapture:
         """Call Anthropic API and return the text response.
 
         Reuses a cached AsyncAnthropic client per GitHubCapture instance.
-        # adapted from axiom-hub/src/capture/llm_helpers.py
 
         Args:
             prompt: User prompt to send to the model.

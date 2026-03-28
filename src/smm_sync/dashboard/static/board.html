@@ -118,6 +118,34 @@
   /* Toast */
   .toast { position: fixed; bottom: 24px; right: 24px; background: var(--text); color: white; padding: 10px 16px; border-radius: 8px; font-size: 13px; z-index: 200; opacity: 0; transform: translateY(8px); transition: all 0.2s; pointer-events: none; }
   .toast.show { opacity: 1; transform: translateY(0); }
+
+  /* A/B picker styles */
+  .choice-cards { display: flex; gap: 10px; flex-direction: column; }
+  .choice-card { border: 2px solid var(--border); border-radius: 8px; padding: 12px 14px; cursor: pointer; transition: all 0.15s; }
+  .choice-card:hover { border-color: var(--accent); background: var(--accent-light); }
+  .choice-card.selected { border-color: var(--green); background: var(--green-light); }
+  .choice-card.dimmed { opacity: 0.45; }
+  .choice-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-dim); margin-bottom: 4px; }
+  .choice-title { font-size: 13px; font-weight: 500; margin-bottom: 4px; }
+  .choice-rationale { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+  .custom-toggle { font-size: 12px; color: var(--accent); cursor: pointer; text-decoration: underline; margin-top: 6px; display: inline-block; }
+  .custom-toggle:hover { color: var(--text); }
+
+  /* Card action layout */
+  .card-resolve-btn { width: 28px; height: 28px; border-radius: 5px; border: 1px solid var(--green-border); background: var(--green-light); cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; color: var(--green); font-weight: 600; transition: all 0.1s; flex-shrink: 0; }
+  .card-resolve-btn:hover { background: var(--green); color: white; }
+  .card-dismiss-link { font-size: 11px; color: var(--text-dim); cursor: pointer; white-space: nowrap; padding: 2px 0; }
+  .card-dismiss-link:hover { color: var(--text-muted); text-decoration: underline; }
+
+  /* Done card badges */
+  .card-done-info { margin-top: 7px; display: flex; flex-direction: column; gap: 3px; padding-top: 7px; border-top: 1px solid var(--border); }
+  .badge-resolved { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 4px; background: var(--green-light); color: var(--green); border: 1px solid var(--green-border); display: inline-block; }
+  .badge-dismissed { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 4px; background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); display: inline-block; }
+  .card-kept { font-size: 11px; color: var(--text-mid); }
+  .card-rationale-done { font-size: 11px; color: var(--text-dim); font-style: italic; }
+
+  /* Disabled button */
+  .btn-primary:disabled, .btn-primary[disabled] { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -152,8 +180,8 @@
     </div>
     <div class="nav-section">
       <div class="nav-label">CAPTURE</div>
-      <a class="nav-item" href="#" style="text-decoration:none"><span class="nav-icon">⑂</span><span>GitHub</span><span class="nav-badge blue" id="sb-github-badge">—</span></a>
-      <a class="nav-item" href="#" style="text-decoration:none"><span class="nav-icon">#</span><span>Slack</span><span class="nav-soon">soon</span></a>
+      <span class="nav-item" style="cursor:default;opacity:0.55"><span class="nav-icon">⑂</span><span>GitHub</span><span class="nav-soon">soon</span></span>
+      <span class="nav-item" style="cursor:default;opacity:0.55"><span class="nav-icon">#</span><span>Slack</span><span class="nav-soon">soon</span></span>
     </div>
   </nav>
   <div class="sidebar-footer">
@@ -251,28 +279,75 @@
 
 <!-- Resolve Modal -->
 <div class="overlay" id="resolve-overlay">
-  <div class="modal">
+  <div class="modal" style="width:520px">
     <div class="modal-header">
-      <div class="modal-title">Resolve Decision</div>
+      <div class="modal-title" id="resolve-modal-title">Resolve Decision</div>
       <div class="modal-close" onclick="closeModal('resolve-overlay')">×</div>
     </div>
     <div class="modal-body">
-      <div class="form-group">
-        <label class="form-label">Decision *</label>
-        <input class="form-input" id="resolve-decision" placeholder="What was decided?" />
+      <!-- A/B picker mode (for contradiction items) -->
+      <div id="resolve-ab-mode">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px" id="resolve-contra-title"></div>
+        <div class="choice-cards">
+          <div class="choice-card" id="resolve-card-a" onclick="selectBoardChoice('a')">
+            <div class="choice-label">Option A</div>
+            <div class="choice-title" id="resolve-a-title"></div>
+            <div class="choice-rationale" id="resolve-a-rationale"></div>
+          </div>
+          <div class="choice-card" id="resolve-card-b" onclick="selectBoardChoice('b')">
+            <div class="choice-label">Option B</div>
+            <div class="choice-title" id="resolve-b-title"></div>
+            <div class="choice-rationale" id="resolve-b-rationale"></div>
+          </div>
+        </div>
+        <div class="form-group" style="margin-top:10px">
+          <label class="form-label">Rationale (optional)</label>
+          <textarea class="form-input" id="resolve-ab-note" rows="2" placeholder="Why did you choose this option?"></textarea>
+        </div>
+        <span class="custom-toggle" onclick="switchToCustomMode()">Or resolve with custom decision</span>
       </div>
-      <div class="form-group">
-        <label class="form-label">Rationale</label>
-        <textarea class="form-input" id="resolve-rationale" rows="3" placeholder="Why was this decided?"></textarea>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Alternatives considered (comma-separated)</label>
-        <input class="form-input" id="resolve-alternatives" placeholder="Option A, Option B, ..." />
+      <!-- Free-text mode (fallback / custom) -->
+      <div id="resolve-custom-mode" style="display:none">
+        <div class="form-group">
+          <label class="form-label">Decision *</label>
+          <input class="form-input" id="resolve-decision" placeholder="What was decided?" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Rationale</label>
+          <textarea class="form-input" id="resolve-rationale" rows="3" placeholder="Why was this decided?"></textarea>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Alternatives considered (comma-separated)</label>
+          <input class="form-input" id="resolve-alternatives" placeholder="Option A, Option B, ..." />
+        </div>
+        <span class="custom-toggle" id="resolve-back-link" onclick="switchToABMode()" style="display:none">← Back to A/B choice</span>
       </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('resolve-overlay')">Cancel</button>
-      <button class="btn btn-primary" onclick="submitResolve()" style="background:var(--green)">✓ Resolve & Record</button>
+      <button class="btn btn-primary" id="resolve-confirm-btn" onclick="submitResolve()" style="background:var(--green)" disabled>✓ Confirm Choice</button>
+    </div>
+  </div>
+</div>
+
+<!-- Dismiss Modal -->
+<div class="overlay" id="dismiss-overlay">
+  <div class="modal" style="width:460px">
+    <div class="modal-header">
+      <div class="modal-title">Dismiss this contradiction?</div>
+      <div class="modal-close" onclick="closeModal('dismiss-overlay')">×</div>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:13px;color:var(--text-mid);font-style:italic;line-height:1.5" id="dismiss-contra-title"></div>
+      <div style="font-size:12px;color:var(--text-muted)">This means it's not a real conflict. It won't appear again.</div>
+      <div class="form-group">
+        <label class="form-label">Reason (optional)</label>
+        <textarea class="form-input" id="dismiss-reason" rows="2" placeholder="Why isn't this a real conflict?"></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('dismiss-overlay')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitDismiss()" style="background:var(--text-muted)">Dismiss</button>
     </div>
   </div>
 </div>
@@ -284,6 +359,13 @@
 let boardItems = [];
 let draggingId = null;
 let pendingResolveId = null;
+let pendingContraId = null;      // full contradiction id if item is a contradiction
+let resolveWinnerId = null;
+let resolveLoserId = null;
+let resolveWinnerTitle = null;
+let resolveMode = 'custom';      // 'ab' or 'custom'
+let pendingDismissId = null;
+let pendingDismissContraId = null;
 
 function showToast(msg) {
   const t = document.getElementById('toast');
@@ -328,16 +410,144 @@ async function submitAdd() {
   }
 }
 
-function openResolveModal(itemId) {
+function selectBoardChoice(which) {
+  const cardA = document.getElementById('resolve-card-a');
+  const cardB = document.getElementById('resolve-card-b');
+  if (which === 'a') {
+    resolveWinnerId = cardA.dataset.decisionId || cardA.dataset.decisionTitle;
+    resolveLoserId = cardB.dataset.decisionId || cardB.dataset.decisionTitle;
+    resolveWinnerTitle = cardA.dataset.decisionTitle;
+    cardA.className = 'choice-card selected';
+    cardB.className = 'choice-card dimmed';
+  } else {
+    resolveWinnerId = cardB.dataset.decisionId || cardB.dataset.decisionTitle;
+    resolveLoserId = cardA.dataset.decisionId || cardA.dataset.decisionTitle;
+    resolveWinnerTitle = cardB.dataset.decisionTitle;
+    cardB.className = 'choice-card selected';
+    cardA.className = 'choice-card dimmed';
+  }
+  // Enable confirm button once a choice is made
+  const btn = document.getElementById('resolve-confirm-btn');
+  if (btn) btn.disabled = false;
+}
+
+function switchToCustomMode() {
+  document.getElementById('resolve-ab-mode').style.display = 'none';
+  document.getElementById('resolve-custom-mode').style.display = 'block';
+  document.getElementById('resolve-back-link').style.display = pendingContraId ? 'inline-block' : 'none';
+  resolveMode = 'custom';
+  const btn = document.getElementById('resolve-confirm-btn');
+  if (btn) btn.disabled = false;
+  setTimeout(() => document.getElementById('resolve-decision').focus(), 50);
+}
+
+function switchToABMode() {
+  document.getElementById('resolve-ab-mode').style.display = 'block';
+  document.getElementById('resolve-custom-mode').style.display = 'none';
+  resolveMode = 'ab';
+  const btn = document.getElementById('resolve-confirm-btn');
+  if (btn) btn.disabled = !resolveWinnerId;
+}
+
+async function openResolveModal(itemId) {
   pendingResolveId = itemId;
+  pendingContraId = null;
+  resolveWinnerId = null;
+  resolveLoserId = null;
+  resolveWinnerTitle = null;
+  resolveMode = 'custom';
+
+  // Reset confirm button to disabled
+  const confirmBtn = document.getElementById('resolve-confirm-btn');
+  if (confirmBtn) confirmBtn.disabled = true;
+
+  const item = boardItems.find(i => i.id === itemId);
+  const contraId = item && item._contradiction_id;
+
+  if (contraId) {
+    // Fetch this specific contradiction for A/B picker
+    try {
+      const contra = await fetch(`/api/contradictions/${contraId}`).then(r => r.json());
+      if (contra && (contra.decision_a || contra.decision_b)) {
+        pendingContraId = contraId;
+        resolveMode = 'ab';
+
+        document.getElementById('resolve-modal-title').textContent = 'Resolve Contradiction';
+        document.getElementById('resolve-contra-title').textContent =
+          (contra.decision_a || 'Option A') + ' \u2194 ' + (contra.decision_b || 'Option B');
+
+        const cardA = document.getElementById('resolve-card-a');
+        const cardB = document.getElementById('resolve-card-b');
+
+        document.getElementById('resolve-a-title').textContent = contra.decision_a || 'Option A';
+        document.getElementById('resolve-a-rationale').textContent = contra.decision_a_rationale || '(no rationale recorded)';
+        cardA.dataset.decisionId = contra.decision_a_id || '';
+        cardA.dataset.decisionTitle = contra.decision_a || '';
+        cardA.className = 'choice-card';
+
+        document.getElementById('resolve-b-title').textContent = contra.decision_b || 'Option B';
+        document.getElementById('resolve-b-rationale').textContent = contra.decision_b_rationale || '(no rationale recorded)';
+        cardB.dataset.decisionId = contra.decision_b_id || '';
+        cardB.dataset.decisionTitle = contra.decision_b || '';
+        cardB.className = 'choice-card';
+
+        document.getElementById('resolve-ab-note').value = '';
+        document.getElementById('resolve-ab-mode').style.display = 'block';
+        document.getElementById('resolve-custom-mode').style.display = 'none';
+        openModal('resolve-overlay');
+        return;
+      }
+    } catch(e) {}
+  }
+
+  // Fallback: free-text form
+  document.getElementById('resolve-modal-title').textContent = 'Resolve Decision';
+  document.getElementById('resolve-ab-mode').style.display = 'none';
+  document.getElementById('resolve-custom-mode').style.display = 'block';
+  document.getElementById('resolve-back-link').style.display = 'none';
   document.getElementById('resolve-decision').value = '';
   document.getElementById('resolve-rationale').value = '';
   document.getElementById('resolve-alternatives').value = '';
+  if (confirmBtn) confirmBtn.disabled = false;
   openModal('resolve-overlay');
   setTimeout(() => document.getElementById('resolve-decision').focus(), 50);
 }
 
 async function submitResolve() {
+  if (resolveMode === 'ab' && pendingContraId) {
+    // A/B picker mode: resolve contradiction + mark board item done
+    if (!resolveWinnerId || !resolveLoserId) {
+      showToast('✗ Please choose Option A or Option B');
+      return;
+    }
+    const note = document.getElementById('resolve-ab-note').value.trim();
+    try {
+      const r = await fetch(`/api/contradictions/${pendingContraId}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ winner_id: resolveWinnerId || '', loser_id: resolveLoserId || '', note }),
+      });
+      if (!r.ok) throw new Error('Resolve failed');
+      // Mark board item done and store winner info for display
+      await fetch(`/api/board/${pendingResolveId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: 'done',
+          _resolved_winner: resolveWinnerTitle || resolveWinnerId || '',
+          _resolved_rationale: note,
+        }),
+      });
+      closeModal('resolve-overlay');
+      await loadBoard();
+      showToast('✓ Decision recorded — contradiction resolved');
+    } catch(e) {
+      showToast('✗ Error: ' + e.message);
+    }
+    return;
+  }
+
+  // Free-text mode
   const decision = document.getElementById('resolve-decision').value.trim();
   if (!decision) { showToast('✗ Decision text is required'); return; }
   const altRaw = document.getElementById('resolve-alternatives').value.trim();
@@ -363,11 +573,48 @@ async function submitResolve() {
   }
 }
 
-async function deleteItem(id) {
-  if (!confirm('Delete this item?')) return;
-  await fetch(`/api/board/${id}`, { method: 'DELETE' });
-  await loadBoard();
-  showToast('✓ Deleted');
+async function openDismissModal(boardItemId, contraId) {
+  pendingDismissId = boardItemId;
+  pendingDismissContraId = contraId;
+  // Fetch contradiction details for a human-readable title
+  let contraTitle = '';
+  try {
+    const contra = await fetch(`/api/contradictions/${contraId}`).then(r => r.json());
+    if (contra && contra.decision_a && contra.decision_b) {
+      contraTitle = `"${contra.decision_a} \u2194 ${contra.decision_b}"`;
+    } else if (contra && contra.title) {
+      contraTitle = `"${contra.title}"`;
+    }
+  } catch(e) {
+    const item = boardItems.find(i => i.id === boardItemId);
+    if (item) contraTitle = `"${item.title}"`;
+  }
+  document.getElementById('dismiss-contra-title').textContent = contraTitle;
+  document.getElementById('dismiss-reason').value = '';
+  openModal('dismiss-overlay');
+}
+
+async function submitDismiss() {
+  if (!pendingDismissContraId) return;
+  const reason = document.getElementById('dismiss-reason').value.trim();
+  try {
+    const r = await fetch(`/api/contradictions/${pendingDismissContraId}/ignore`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+    if (!r.ok) throw new Error('Dismiss failed');
+    await fetch(`/api/board/${pendingDismissId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'done', _dismissed: true }),
+    });
+    closeModal('dismiss-overlay');
+    await loadBoard();
+    showToast("Dismissed — won't appear again");
+  } catch(e) {
+    showToast('✗ Error: ' + e.message);
+  }
 }
 
 function renderCard(item) {
@@ -388,14 +635,21 @@ function renderCard(item) {
   card.innerHTML = `
     <div class="card-title">${escHtml(item.title)}</div>
     ${item.description ? `<div class="card-desc">${escHtml(item.description.slice(0, 120))}${item.description.length > 120 ? '…' : ''}</div>` : ''}
-    <div class="card-footer">
+    <div class="card-footer" style="display:flex;align-items:center;gap:6px">
       <span class="card-type ${typeClass}">${typeClass}</span>
       ${priHigh ? '<span class="card-priority high">high</span>' : ''}
-      <div class="card-actions">
-        ${item.status !== 'done' && item.type === 'decision' ? `<div class="card-btn resolve" onclick="openResolveModal('${item.id}')" title="Resolve">✓</div>` : ''}
-        <div class="card-btn" onclick="deleteItem('${item.id}')" title="Delete">✕</div>
-      </div>
+      ${item.status !== 'done' && item.type === 'decision' ? `<div class="card-resolve-btn" onclick="openResolveModal('${item.id}')" title="Resolve this contradiction">✓</div>` : ''}
+      <span style="flex:1"></span>
+      ${item.status !== 'done' && item._contradiction_id ? `<span class="card-dismiss-link" onclick="openDismissModal('${item.id}','${item._contradiction_id}')">Dismiss</span>` : ''}
     </div>
+    ${item.status === 'done' && item._resolved_winner ? `
+    <div class="card-done-info">
+      <span class="badge-resolved">✓ Resolved</span>
+      <span class="card-kept">Kept: ${escHtml(item._resolved_winner)}</span>
+      ${item._resolved_rationale ? `<span class="card-rationale-done">${escHtml(item._resolved_rationale)}</span>` : ''}
+    </div>` : ''}
+    ${item.status === 'done' && item._dismissed ? `
+    <div class="card-done-info"><span class="badge-dismissed">Dismissed</span></div>` : ''}
   `;
   return card;
 }
@@ -417,7 +671,8 @@ function renderBoard(data) {
   }
 
   const backlogCount = (grouped.backlog || []).length;
-  document.getElementById('backlog-badge').textContent = backlogCount;
+  const bbadge = document.getElementById('backlog-badge') || document.getElementById('sb-board-badge');
+  if (bbadge) bbadge.textContent = backlogCount;
   boardItems = data.items || [];
 }
 
@@ -468,6 +723,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     closeModal('add-overlay');
     closeModal('resolve-overlay');
+    closeModal('dismiss-overlay');
   }
 });
 </script>
@@ -478,6 +734,8 @@ document.addEventListener('keydown', e => {
     const stats = await fetch('/api/stats').then(r => r.json());
     const el1 = document.getElementById('sb-decisions-badge');
     if (el1) el1.textContent = stats.decisions || '—';
+    const el2 = document.getElementById('sb-board-badge');
+    if (el2) el2.textContent = (stats.pending_decisions != null ? stats.pending_decisions : (stats.contradictions || '—'));
     const el4 = document.getElementById('sb-compliance-badge');
     if (el4) el4.textContent = stats.injections_total || '—';
     const agents = await fetch('/api/agents').then(r => r.json());

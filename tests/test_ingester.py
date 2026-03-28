@@ -72,7 +72,7 @@ def test_parse_active_task_content():
 def test_parse_produces_content_hash():
     result = parse_agents_md(_SAMPLE_AGENTS_MD)
     assert "content_hash" in result
-    assert len(result["content_hash"]) == 32  # MD5 hex
+    assert len(result["content_hash"]) == 64  # SHA256 hex
 
 
 def test_parse_empty_string():

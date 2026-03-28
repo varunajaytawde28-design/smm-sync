@@ -11,8 +11,10 @@ Opens: http://localhost:7842
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
+import re
 import sys
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -23,9 +25,11 @@ import uvicorn
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+from smm_sync.config import DEFAULT_DASHBOARD_PORT
 
 try:
     from reportlab.lib.pagesizes import letter
@@ -35,12 +39,80 @@ try:
 except ImportError:
     _PDF_AVAILABLE = False
 
+async def _startup_contradiction_check() -> None:
+    """Run smm check on startup if there are decisions newer than last check.
+
+    Reads .smm/decisions.jsonl and .smm/last_check_timestamp.txt to decide
+    whether a check is needed, then delegates to `smm check` so that
+    .smm/contradictions.jsonl is populated before the first dashboard request.
+    """
+    import subprocess as _subprocess
+
+    smm_dir = _get_smm_dir()
+    decisions_path = smm_dir / "decisions.jsonl"
+    last_check_path = smm_dir / "last_check_timestamp.txt"
+
+    if not decisions_path.exists():
+        return
+
+    last_check_ts: Optional[datetime] = None
+    if last_check_path.exists():
+        try:
+            ts_str = last_check_path.read_text(encoding="utf-8").strip()
+            last_check_ts = datetime.fromisoformat(ts_str)
+        except Exception:
+            pass
+
+    has_new = False
+    if last_check_ts is None:
+        has_new = decisions_path.stat().st_size > 0
+    else:
+        try:
+            for line in decisions_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = json.loads(line)
+                    ts = datetime.fromisoformat(d.get("timestamp", "").replace("Z", "+00:00"))
+                    if ts > last_check_ts:
+                        has_new = True
+                        break
+                except Exception:
+                    has_new = True
+                    break
+        except Exception:
+            pass
+
+    if not has_new:
+        return
+
+    print("[dashboard] New decisions detected — running smm check...", file=sys.stderr)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "smm", "check",
+            stdout=_subprocess.PIPE,
+            stderr=_subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        if stdout:
+            print(f"[dashboard] smm check: {stdout.decode()[:500]}", file=sys.stderr)
+        if proc.returncode != 0 and stderr:
+            print(f"[dashboard] smm check warning: {stderr.decode()[:200]}", file=sys.stderr)
+        else:
+            print("[dashboard] smm check complete", file=sys.stderr)
+    except Exception as exc:
+        print(f"[dashboard] startup contradiction check failed: {exc}", file=sys.stderr)
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Eagerly initialise the graph client and embedding model at startup.
 
     Without this, the first request to any graph-backed endpoint pays the
     2-3 second sentence-transformer model load + Kuzu connection open cost.
+    Also runs smm check if there are unchecked decisions, so contradictions
+    are visible in the dashboard immediately.
     """
     try:
         client = _get_graph_client()
@@ -48,6 +120,9 @@ async def _lifespan(app: FastAPI):
             await client._get_graphiti()
     except Exception as exc:
         print(f"[dashboard] startup preload warning: {exc}", file=sys.stderr)
+
+    await _startup_contradiction_check()
+
     yield
 
 
@@ -77,21 +152,100 @@ def _get_smm_dir() -> Path:
 
 
 _graph_client_cache = None
+_graph_client_cache_dir: "Path | None" = None
+
+
+def _read_decisions_jsonl(smm_dir: Path) -> list[dict]:
+    """Read all decisions from .smm/decisions.jsonl.
+
+    Args:
+        smm_dir: Path to the .smm/ directory.
+
+    Returns:
+        List of decision dicts parsed from JSONL, newest-last order.
+    """
+    decisions_path = smm_dir / "decisions.jsonl"
+    if not decisions_path.exists():
+        return []
+    results: list[dict] = []
+    for raw_line in decisions_path.read_text(encoding="utf-8").splitlines():
+        raw_line = raw_line.strip()
+        if raw_line:
+            try:
+                results.append(json.loads(raw_line))
+            except Exception:
+                pass
+    return results
+
+
+_DECISION_TYPE_MAP: dict[str, str] = {
+    # architectural
+    "architectural": "architectural",
+    "infrastructure": "architectural",
+    "architecture": "architectural",
+    "deployment": "architectural",
+    # technical
+    "technical": "technical",
+    "data-storage": "technical",
+    "data_storage": "technical",
+    "database": "technical",
+    "framework": "technical",
+    "security": "technical",
+    "async-processing": "technical",
+    "async_processing": "technical",
+    "api-design": "technical",
+    "api_design": "technical",
+    "query-strategy": "technical",
+    "query_strategy": "technical",
+    "testing": "technical",
+    # product
+    "product": "product",
+    "feature": "product",
+    "business": "product",
+    # constraint
+    "constraint": "constraint",
+    "limitation": "constraint",
+}
+
+
+def _normalize_decision_type(t: str) -> str:
+    """Normalize a raw decision type string to one of the 4 canonical values.
+
+    Args:
+        t: Raw type string from JSONL, Kuzu, or CLI input.
+
+    Returns:
+        One of: "architectural", "technical", "product", "constraint".
+        Defaults to "technical" for unrecognized values.
+    """
+    return _DECISION_TYPE_MAP.get((t or "").strip().lower(), "technical")
 
 
 def _get_graph_client():
     """Return (lazily initialise) the GraphClient for the context graph.
 
+    Re-creates the client when the smm_dir changes (e.g. during tests where
+    _get_smm_dir is patched to a different tmp directory per test). This
+    prevents stale graph-dir references from contaminating test isolation.
+
     Returns:
         GraphClient instance, or None if context_graph is unavailable.
     """
-    global _graph_client_cache
-    if _graph_client_cache is None:
+    global _graph_client_cache, _graph_client_cache_dir
+    graph_dir = _get_smm_dir() / "graph"
+    if _graph_client_cache is None or _graph_client_cache_dir != graph_dir:
         try:
-            from smm_sync.context_graph.client import get_graph_client
+            from smm_sync.context_graph.client import GraphClient, get_graph_client
 
-            graph_dir = _get_smm_dir() / "graph"
-            _graph_client_cache = get_graph_client(graph_dir=graph_dir)
+            # Use the module-level singleton when graph_dir matches what it
+            # was created with (production path). Create a fresh GraphClient
+            # directly when graph_dir has changed (e.g. per-test tmp dir).
+            from smm_sync.context_graph import client as _cgc_module
+            if _cgc_module._client is not None and _cgc_module._client.graph_dir == graph_dir:
+                _graph_client_cache = _cgc_module._client
+            else:
+                _graph_client_cache = GraphClient(graph_dir=graph_dir)
+            _graph_client_cache_dir = graph_dir
         except Exception:
             return None
     return _graph_client_cache
@@ -171,6 +325,56 @@ def _calculate_time_saved(lineage_path: Path, period_days: int = 7) -> dict:
     }
 
 
+def _get_last_hash(lineage_path: Path) -> str:
+    """Return the content_hash of the last entry in compliance_lineage.jsonl."""
+    if not lineage_path.exists():
+        return "GENESIS"
+    try:
+        last: dict | None = None
+        with open(lineage_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        last = json.loads(line)
+                    except Exception:
+                        pass
+        return last.get("content_hash", "GENESIS") if last else "GENESIS"
+    except Exception:
+        return "GENESIS"
+
+
+def _write_hashed_audit(lineage_path: Path, entry: dict) -> None:
+    """Append an audit entry to compliance_lineage.jsonl with SHA-256 hash chain.
+
+    Deduplicates by content_hash to prevent duplicate entries from re-syncs.
+    """
+    base = {k: v for k, v in entry.items() if k not in ("content_hash", "prev_hash")}
+    canonical = json.dumps(base, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    content_hash = hashlib.sha256(canonical.encode()).hexdigest()
+
+    if lineage_path.exists():
+        try:
+            with open(lineage_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        if json.loads(line).get("content_hash") == content_hash:
+                            return  # duplicate
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    entry["prev_hash"] = _get_last_hash(lineage_path)
+    entry["content_hash"] = content_hash
+    lineage_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lineage_path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
 def _read_compliance_log(smm_dir: Path) -> list[dict]:
     """Read all entries from compliance_lineage.jsonl.
 
@@ -217,12 +421,29 @@ def _read_contradictions(smm_dir: Path) -> list[dict]:
                 line = line.strip()
                 if line:
                     try:
-                        items.append(json.loads(line))
+                        items.append(_normalize_contradiction(json.loads(line)))
                     except Exception as e:
                         print(f"[dashboard] _read_contradictions json parse error: {e}", file=sys.stderr)
     except Exception as e:
         print(f"[dashboard] _read_contradictions file read error: {e}", file=sys.stderr)
     return items
+
+
+def _normalize_contradiction(c: dict) -> dict:
+    """Normalize contradiction field names from demo/old writers to canonical form."""
+    out = dict(c)
+    if not out.get("id"):
+        out["id"] = out.get("uuid", "")
+    if not out.get("explanation"):
+        out["explanation"] = out.get("reason", "")
+    if not out.get("detected_at"):
+        out["detected_at"] = out.get("timestamp", "")
+    # Normalize resolved: bool from status field
+    if not out.get("resolved"):
+        status = out.get("status", "")
+        if status in ("resolved", "dismissed", "ignored"):
+            out["resolved"] = True
+    return out
 
 
 def _write_contradiction(smm_dir: Path, entry: dict) -> None:
@@ -235,8 +456,9 @@ def _write_contradiction(smm_dir: Path, entry: dict) -> None:
     path = smm_dir / "contradictions.jsonl"
     try:
         smm_dir.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
+        from smm_sync.jsonl_writer import append_jsonl_locked
+        if not append_jsonl_locked(path, entry):
+            print("[dashboard] _write_contradiction: lock timeout — skipped", file=sys.stderr)
     except Exception as e:
         print(f"[dashboard] _write_contradiction file write error: {e}", file=sys.stderr)
 
@@ -256,6 +478,47 @@ async def serve_dashboard() -> FileResponse:
     if not index.exists():
         raise HTTPException(status_code=404, detail="Dashboard UI not found. Run 'smm dashboard' to initialize.")
     return FileResponse(str(index))
+
+
+_HOTSPOT_STOP_WORDS = {
+    "the", "and", "for", "with", "this", "that", "are", "have", "from",
+    "not", "but", "use", "used", "uses", "when", "will", "than", "which",
+    "been", "more", "also", "into", "both", "each", "they", "them", "their",
+    "should", "using", "should", "would", "could", "over", "only", "some",
+    "between", "about", "after", "before", "during", "while", "then", "there",
+}
+
+
+def _detect_hotspots(contradictions: list[dict]) -> list[dict]:
+    """Find architectural hotspots: keywords in 3+ unresolved contradiction titles.
+
+    Args:
+        contradictions: All contradiction dicts (normalized).
+
+    Returns:
+        List of dicts with 'keyword' and 'count', max 2 entries.
+    """
+    unresolved = [
+        c for c in contradictions
+        if c.get("status", "pending") not in ("resolved", "dismissed", "ignored")
+        and not c.get("resolved", False)
+    ]
+    keyword_counts: dict[str, int] = {}
+    for c in unresolved:
+        title = (c.get("title") or c.get("name") or "").lower()
+        words = re.findall(r"[a-z][a-z0-9_-]{2,}", title)
+        seen = set()
+        for w in words:
+            if w not in _HOTSPOT_STOP_WORDS and w not in seen:
+                keyword_counts[w] = keyword_counts.get(w, 0) + 1
+                seen.add(w)
+    hotspots = [
+        {"keyword": kw, "count": cnt}
+        for kw, cnt in keyword_counts.items()
+        if cnt >= 3
+    ]
+    hotspots.sort(key=lambda x: -x["count"])
+    return hotspots[:2]
 
 
 # ---------------------------------------------------------------------------
@@ -280,9 +543,26 @@ async def get_stats() -> dict:
     injection_entries = [e for e in entries if e.get("event_type") == "context_injection"]
     injections_today = sum(1 for e in injection_entries if e.get("timestamp", "").startswith(today))
 
-    # Count decisions added today
+    # Count decisions added today and this week
     decision_entries = [e for e in entries if e.get("event_type") == "decision_added"]
     captures_today = sum(1 for e in decision_entries if e.get("timestamp", "").startswith(today))
+    _now = datetime.now(timezone.utc)
+    _week_cutoff = _now - timedelta(days=7)
+    _prev_week_cutoff = _now - timedelta(days=14)
+    decisions_this_week = 0
+    decisions_prev_week = 0
+    for _e in decision_entries:
+        _ts_str = _e.get("timestamp", "")
+        if _ts_str:
+            try:
+                _ts = datetime.fromisoformat(_ts_str.replace("Z", "+00:00"))
+                if _ts >= _week_cutoff:
+                    decisions_this_week += 1
+                elif _ts >= _prev_week_cutoff:
+                    decisions_prev_week += 1
+            except Exception:
+                pass
+    decisions_trend = decisions_this_week - decisions_prev_week
 
     # Avg confidence from decision_added entries
     confidences = [e.get("confidence", 0.0) for e in decision_entries if "confidence" in e]
@@ -290,7 +570,20 @@ async def get_stats() -> dict:
 
     # Count contradictions
     contradictions = await asyncio.to_thread(_read_contradictions, smm_dir)
-    contradiction_count = sum(1 for c in contradictions if not c.get("resolved", False))
+    hotspots = _detect_hotspots(contradictions)
+    _resolved_count = sum(1 for c in contradictions if c.get("status") == "resolved")
+    _pending_count = sum(
+        1 for c in contradictions
+        if c.get("status", "pending") not in ("resolved", "dismissed", "ignored")
+    )
+    if _resolved_count + _pending_count > 0:
+        human_oversight_pct = round(_resolved_count / (_resolved_count + _pending_count) * 100)
+    else:
+        human_oversight_pct = None
+    contradiction_count = sum(
+        1 for c in contradictions
+        if not c.get("resolved", False) and c.get("status", "pending") not in ("resolved", "dismissed", "ignored")
+    )
 
     # Pending board items
     board_items = await asyncio.to_thread(_load_board)
@@ -325,8 +618,17 @@ async def get_stats() -> dict:
     except Exception as e:
         print(f"[dashboard] get_stats graph count error: {e}", file=sys.stderr)
     if decision_count == 0:
-        # Fall back to compliance log if graph is unavailable
-        decision_count = len(set(e.get("decision_title", "") for e in decision_entries if e.get("decision_title")))
+        # Fall back to decisions.jsonl line count (most reliable)
+        _jsonl_rows = await asyncio.to_thread(_read_decisions_jsonl, smm_dir)
+        decision_count = len(_jsonl_rows)
+        if decision_count == 0:
+            # Last resort: unique titles from compliance log (decision_recorded OR decision_added)
+            decision_count = len(set(
+                e.get("decision_title", "") or e.get("title", "")
+                for e in entries
+                if e.get("event_type") in ("decision_recorded", "decision_added")
+                and (e.get("decision_title") or e.get("title"))
+            ))
 
     # Déjà vu count: rejection-keyword hits in today's injections
     deja_vu_today = sum(
@@ -353,6 +655,15 @@ async def get_stats() -> dict:
             repo_owner, repo_name = remote
     except Exception as e:
         print(f"[dashboard] get_stats git remote lookup error: {e}", file=sys.stderr)
+    # Fallback: read project name from .smm/config.json
+    if not repo_name:
+        try:
+            _cfg_path = smm_dir / "config.json"
+            if _cfg_path.exists():
+                _cfg = json.loads(_cfg_path.read_text(encoding="utf-8"))
+                repo_name = _cfg.get("repo_name") or _cfg.get("project") or ""
+        except Exception:
+            pass
 
     total_decisions = decision_count
     total_time_saved_hours = round(time_saved["time_saved_minutes_total"] / 60.0, 1)
@@ -379,10 +690,14 @@ async def get_stats() -> dict:
         "total": total_decisions,
         "pending_decisions": pending_decisions,
         "pending": pending_decisions,
-        "decisions_this_week": captures_today,
+        "decisions_this_week": decisions_this_week,
+        "decisions_prev_week": decisions_prev_week,
+        "decisions_trend": decisions_trend,
+        "hotspots": hotspots,
         "time_saved_hours": total_time_saved_hours,
         "time_saved": time_saved["time_saved_formatted_total"],
         "time_saved_meta": "context lookups avoided",
+        "human_oversight_pct": human_oversight_pct,
 
         # existing time-saved fields
         **time_saved,
@@ -395,14 +710,18 @@ async def get_stats() -> dict:
 
 @app.get("/api/decisions")
 async def get_decisions(
-    limit: int = Query(20, ge=1, le=200),
+    limit: int = Query(20, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     type: str = Query("all"),
     status: str = Query("all"),
 ) -> dict:
-    """Return paginated list of decisions from the knowledge graph.
+    """Return paginated list of decisions.
 
-    Falls back to empty list if graph is unavailable (no crash on fresh install).
+    Primary source: .smm/decisions.jsonl (always current).
+    Secondary source: Kuzu graph (provides edge/graph data, may be stale).
+
+    Falls back to Kuzu if decisions.jsonl does not exist (existing installs).
+    Adds a ``sync_banner`` field when Kuzu has fewer records than JSONL.
 
     Args:
         limit: Maximum results to return.
@@ -411,85 +730,145 @@ async def get_decisions(
         status: Status filter ('all', 'approved', 'deferred', 'ignored').
 
     Returns:
-        Dict with decisions list, total, limit, offset.
+        Dict with decisions list, total, limit, offset, optional sync_banner.
     """
     smm_dir = _get_smm_dir()
     decisions: list[dict] = []
+    sync_banner: str | None = None
 
-    try:
-        client = _get_graph_client()
-        if client is None:
-            raise RuntimeError("Graph client unavailable")
-        raw = await client.get_decisions(project="smm-sync")
+    # ── Primary: read from decisions.jsonl ───────────────────────────────────
+    jsonl_rows = _read_decisions_jsonl(smm_dir)
 
-        for d in raw:
-            decision_type = "architectural"
-            content_lower = (d.content or "").lower()
-            if "product" in content_lower:
-                decision_type = "product"
-            elif "technical" in content_lower:
-                decision_type = "technical"
-
+    if jsonl_rows:
+        for d in jsonl_rows:
+            decision_type = _normalize_decision_type(d.get("type", "technical"))
             if type != "all" and decision_type != type:
                 continue
 
-            # Parse status from content
-            decision_status = "approved"
-            for line in (d.content or "").splitlines():
-                if line.startswith("Status:"):
-                    decision_status = line.split(":", 1)[1].strip()
-                    break
-
-            if status != "all" and decision_status != status:
+            d_status = "approved"  # JSONL decisions are approved by default
+            if status != "all" and d_status != status:
                 continue
 
-            # Parse confidence from content
-            confidence = 0.80
-            for line in (d.content or "").splitlines():
-                if line.startswith("Confidence:"):
-                    try:
-                        confidence = float(line.split(":", 1)[1].strip())
-                    except Exception as e:
-                        print(f"[dashboard] get_decisions confidence parse error: {e}", file=sys.stderr)
-
-            # Parse rationale from content
-            rationale = ""
-            for line in (d.content or "").splitlines():
-                if line.startswith("Rationale:"):
-                    rationale = line.split(":", 1)[1].strip()
-                    break
-
-            created_at = d.created_at
-            if hasattr(created_at, "isoformat"):
-                created_at_str = created_at.isoformat()
-            else:
-                created_at_str = str(created_at) if created_at else datetime.now(timezone.utc).isoformat()
-
+            _raw_conf = float(d.get("confidence", 0.80) or 0.80)
+            _conf = _raw_conf / 100.0 if _raw_conf > 1.0 else _raw_conf
             decisions.append({
-                "id": str(d.id),
-                "title": d.title or "(untitled)",
+                "id": d.get("uuid", ""),
+                "title": d.get("title", "(untitled)"),
                 "type": decision_type,
-                "confidence": confidence,
-                "source_type": "manual",
-                "created_at": created_at_str,
-                "is_constraint": "[CONSTRAINT]" in (d.title or ""),
-                "is_superseded": not d.valid,
+                "confidence": _conf,
+                "source_type": d.get("source", "manual"),
+                "created_at": d.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                "is_constraint": decision_type == "constraint" or "[CONSTRAINT]" in d.get("title", ""),
+                "is_superseded": False,
                 "overrides": None,
-                "rationale": rationale,
-                "status": decision_status,
+                "rationale": d.get("rationale", ""),
+                "alternatives": d.get("alternatives", ""),
+                "constraints": d.get("constraints", ""),
+                "made_by": d.get("made_by", ""),
+                "status": d_status,
+                "context": d.get("context") or {},
             })
-    except Exception as _exc:
-        print(f"[dashboard] get_decisions error: {_exc}", file=sys.stderr)
+
+        # Check Kuzu count for sync banner (best-effort, non-blocking)
+        try:
+            client = _get_graph_client()
+            if client is not None:
+                kuzu_raw = await client.get_decisions(project="smm-sync")
+                kuzu_count = len(kuzu_raw)
+                if kuzu_count < len(jsonl_rows):
+                    sync_banner = (
+                        f"Graph needs sync ({kuzu_count} in Kuzu vs "
+                        f"{len(jsonl_rows)} in JSONL). Run: smm check"
+                    )
+        except Exception as _kuzu_exc:
+            print(f"[dashboard] kuzu count check: {_kuzu_exc}", file=sys.stderr)
+
+    else:
+        # ── Fallback: Kuzu (existing installs without decisions.jsonl) ───────
+        try:
+            client = _get_graph_client()
+            if client is None:
+                raise RuntimeError("Graph client unavailable")
+            raw = await client.get_decisions(project="smm-sync")
+
+            for d in raw:
+                _raw_type = "architectural"
+                content_lower = (d.content or "").lower()
+                if "product" in content_lower:
+                    _raw_type = "product"
+                elif "technical" in content_lower:
+                    _raw_type = "technical"
+                decision_type = _normalize_decision_type(_raw_type)
+
+                if type != "all" and decision_type != type:
+                    continue
+
+                _raw_content = (d.content or "").replace("\\n", "\n")
+                decision_status = "approved"
+                for line in _raw_content.splitlines():
+                    if line.startswith("Status:"):
+                        decision_status = line.split(":", 1)[1].strip()
+                        break
+
+                if status != "all" and decision_status != status:
+                    continue
+
+                _content_lines = _raw_content.splitlines()
+                confidence = 0.80
+                for line in _content_lines:
+                    if line.startswith("Confidence:"):
+                        try:
+                            _c = float(line.split(":", 1)[1].strip())
+                            confidence = _c / 100.0 if _c > 1.0 else _c
+                        except Exception as e:
+                            print(
+                                f"[dashboard] get_decisions confidence parse: {e}",
+                                file=sys.stderr,
+                            )
+
+                rationale = ""
+                for line in _content_lines:
+                    if line.startswith("Rationale:"):
+                        rationale = line.split(":", 1)[1].strip()
+                        break
+
+                created_at = d.created_at
+                if hasattr(created_at, "isoformat"):
+                    created_at_str = created_at.isoformat()
+                else:
+                    created_at_str = (
+                        str(created_at) if created_at
+                        else datetime.now(timezone.utc).isoformat()
+                    )
+
+                decisions.append({
+                    "id": str(d.id),
+                    "title": d.title or "(untitled)",
+                    "type": decision_type,
+                    "confidence": confidence,
+                    "source_type": "manual",
+                    "created_at": created_at_str,
+                    "is_constraint": "[CONSTRAINT]" in (d.title or ""),
+                    "is_superseded": not d.valid,
+                    "overrides": None,
+                    "rationale": rationale,
+                    "status": decision_status,
+                })
+        except Exception as _exc:
+            print(f"[dashboard] get_decisions fallback error: {_exc}", file=sys.stderr)
 
     total = len(decisions)
     paginated = decisions[offset: offset + limit]
 
-    return {
+    result: dict = {
         "decisions": paginated,
         "total": total,
         "limit": limit,
         "offset": offset,
     }
+    if sync_banner:
+        result["sync_banner"] = sync_banner
+    return result
 
 
 @app.get("/api/decisions/{decision_id}/export")
@@ -543,24 +922,55 @@ async def export_decision(decision_id: str) -> StreamingResponse:
 
 @app.get("/api/contradictions")
 async def get_contradictions() -> dict:
-    """Return list of detected contradictions.
+    """Return list of detected contradictions with decision UUIDs and rationale.
 
     Returns:
         Dict with contradictions list.
     """
     smm_dir = _get_smm_dir()
     raw = await asyncio.to_thread(_read_contradictions, smm_dir)
+
+    # Build title→{uuid, rationale} map for the A/B winner picker
+    title_info: dict[str, dict] = {}
+    try:
+        gc = _get_graph_client()
+        if gc is not None:
+            await gc._get_graphiti()
+            rows, _, _ = await gc._driver.execute_query(
+                "MATCH (e:Episodic) RETURN e.uuid, e.name, e.content "
+                "ORDER BY e.created_at DESC LIMIT 500"
+            )
+            for row in rows:
+                name = row.get("e.name", "") or ""
+                uuid = row.get("e.uuid", "") or ""
+                content = (row.get("e.content", "") or "").replace("\\n", "\n")
+                rationale = ""
+                if "Rationale: " in content:
+                    rationale = content.split("Rationale: ", 1)[1].split("\n")[0].strip()[:200]
+                if name:
+                    title_info[name] = {"uuid": uuid, "rationale": rationale}
+    except Exception as _e:
+        print(f"[dashboard] get_contradictions kuzu lookup error: {_e}", file=sys.stderr)
+
     items = []
     for c in raw:
+        da = c.get("decision_a", "")
+        db = c.get("decision_b", "")
+        da_info = title_info.get(da, {})
+        db_info = title_info.get(db, {})
         items.append({
             "id": c.get("id", ""),
             "title": (
-                f"{c.get('decision_a', 'Unknown')[:35]} "
+                f"{da[:35]} "
                 f"\u2194 "
-                f"{c.get('decision_b', 'Unknown')[:35]}"
+                f"{db[:35]}"
             ),
-            "decision_a": c.get("decision_a", ""),
-            "decision_b": c.get("decision_b", ""),
+            "decision_a": da,
+            "decision_a_id": da_info.get("uuid", ""),
+            "decision_a_rationale": da_info.get("rationale", ""),
+            "decision_b": db,
+            "decision_b_id": db_info.get("uuid", ""),
+            "decision_b_rationale": db_info.get("rationale", ""),
             "explanation": c.get("explanation", ""),
             "detected_at": c.get("detected_at", ""),
             "resolved": c.get("resolved", False),
@@ -568,19 +978,112 @@ async def get_contradictions() -> dict:
     return {"contradictions": items}
 
 
-class ResolveBody(BaseModel):
-    """Body for POST /api/contradictions/{id}/resolve."""
+@app.get("/api/contradictions/{contradiction_id}")
+async def get_contradiction(contradiction_id: str) -> dict:
+    """Return a single contradiction by ID with decision UUIDs and rationale.
 
-    resolution: str
+    Looks up rationale first from decisions.jsonl (most reliable), then
+    falls back to a full Kuzu scan.
+
+    Args:
+        contradiction_id: Contradiction UUID.
+
+    Returns:
+        Dict with contradiction fields.
+    """
+    smm_dir = _get_smm_dir()
+    raw = await asyncio.to_thread(_read_contradictions, smm_dir)
+    c = next((x for x in raw if x.get("id") == contradiction_id), None)
+    if not c:
+        raise HTTPException(status_code=404, detail="Contradiction not found")
+
+    da = c.get("decision_a", "")
+    db = c.get("decision_b", "")
+    da_uuid = ""
+    db_uuid = ""
+    da_rationale = ""
+    db_rationale = ""
+
+    # Primary: match by title in decisions.jsonl
+    try:
+        jsonl_rows = await asyncio.to_thread(_read_decisions_jsonl, smm_dir)
+        for d in jsonl_rows:
+            t = d.get("title", "")
+            if t == da and not da_rationale:
+                da_rationale = d.get("rationale", "")
+                da_uuid = d.get("uuid", "")
+            elif t == db and not db_rationale:
+                db_rationale = d.get("rationale", "")
+                db_uuid = d.get("uuid", "")
+    except Exception as _je:
+        print(f"[dashboard] get_contradiction jsonl lookup error: {_je}", file=sys.stderr)
+
+    # Fallback: Kuzu full scan (no parameterized queries)
+    if not da_rationale or not db_rationale:
+        try:
+            gc = _get_graph_client()
+            if gc is not None:
+                await gc._get_graphiti()
+                rows, _, _ = await gc._driver.execute_query(
+                    "MATCH (e:Episodic) RETURN e.uuid, e.name, e.content "
+                    "ORDER BY e.created_at DESC LIMIT 500"
+                )
+                for row in rows:
+                    name = row.get("e.name", "") or ""
+                    uuid_val = row.get("e.uuid", "") or ""
+                    content = (row.get("e.content", "") or "").replace("\\n", "\n")
+                    rationale = ""
+                    if "Rationale: " in content:
+                        rationale = content.split("Rationale: ", 1)[1].split("\n")[0].strip()[:200]
+                    if name == da and not da_rationale:
+                        da_rationale = rationale
+                        da_uuid = da_uuid or uuid_val
+                    elif name == db and not db_rationale:
+                        db_rationale = rationale
+                        db_uuid = db_uuid or uuid_val
+        except Exception as _e:
+            print(f"[dashboard] get_contradiction kuzu lookup error: {_e}", file=sys.stderr)
+
+    return {
+        "id": c.get("id", ""),
+        "title": f"{da[:35]} \u2194 {db[:35]}",
+        "decision_a": da,
+        "decision_a_id": da_uuid,
+        "decision_a_rationale": da_rationale,
+        "decision_b": db,
+        "decision_b_id": db_uuid,
+        "decision_b_rationale": db_rationale,
+        "explanation": c.get("explanation", ""),
+        "detected_at": c.get("detected_at", ""),
+        "resolved": c.get("resolved", False),
+    }
+
+
+class ResolveBody(BaseModel):
+    """Body for POST /api/contradictions/{id}/resolve.
+
+    New flow: winner_id + loser_id — PM picks which decision to keep.
+    Legacy flow: resolution (free-text string) — still accepted for backward compat.
+    """
+
+    winner_id: str | None = None   # UUID of the decision to keep
+    loser_id: str | None = None    # UUID of the decision to supersede
+    note: str = ""                  # PM's optional context note
+    resolution: str | None = None  # legacy free-text field
 
 
 @app.post("/api/contradictions/{contradiction_id}/resolve")
 async def resolve_contradiction(contradiction_id: str, body: ResolveBody) -> dict:
     """Mark a contradiction as resolved.
 
+    New flow: PM picks winner_id / loser_id. Winner is marked 'approved'
+    in Kuzu; loser is marked 'superseded'. JSONL records winner/loser titles.
+
+    Legacy flow: only 'resolution' string provided. No Kuzu status update.
+
     Args:
         contradiction_id: Contradiction UUID.
-        body: Resolution description.
+        body: Resolution body (winner_id/loser_id or legacy resolution string).
 
     Returns:
         Dict with success flag.
@@ -588,27 +1091,181 @@ async def resolve_contradiction(contradiction_id: str, body: ResolveBody) -> dic
     smm_dir = _get_smm_dir()
     raw = await asyncio.to_thread(_read_contradictions, smm_dir)
 
-    updated = []
+    updated: list[dict] = []
     found = False
+    resolved_entry: dict = {}
     for c in raw:
         if c.get("id") == contradiction_id:
             c["resolved"] = True
-            c["resolution"] = body.resolution
             c["resolved_at"] = datetime.now(timezone.utc).isoformat()
+            c["resolved_by"] = "dashboard"
+            if body.winner_id and body.loser_id:
+                c["note"] = body.note
+            elif body.resolution is not None:
+                c["resolution"] = body.resolution
+            resolved_entry = dict(c)
             found = True
         updated.append(c)
 
     if not found:
         raise HTTPException(status_code=404, detail="Contradiction not found")
 
-    # Rewrite the file
+    winner_title = ""
+    loser_title = ""
+
+    # New A/B picker flow: look up titles, update Kuzu node statuses
+    if body.winner_id and body.loser_id:
+        gc = _get_graph_client()
+        if gc is None:
+            raise HTTPException(status_code=503, detail="Graph client unavailable")
+        try:
+            await gc._get_graphiti()
+            w_rows, _, _ = await gc._driver.execute_query(
+                f"MATCH (e:Episodic) WHERE e.uuid = '{body.winner_id}' RETURN e.name"
+            )
+            if w_rows:
+                winner_title = w_rows[0].get("e.name", "") or ""
+            l_rows, _, _ = await gc._driver.execute_query(
+                f"MATCH (e:Episodic) WHERE e.uuid = '{body.loser_id}' RETURN e.name"
+            )
+            if l_rows:
+                loser_title = l_rows[0].get("e.name", "") or ""
+        except Exception as _e:
+            print(f"[dashboard] resolve title lookup error: {_e}", file=sys.stderr)
+
+        # Write winner/loser titles into the JSONL record
+        for c in updated:
+            if c.get("id") == contradiction_id:
+                c["winner"] = winner_title
+                c["loser"] = loser_title
+                break
+
+        # Update Kuzu status for both decisions
+        try:
+            await _update_decision_status(body.winner_id, "approved")
+        except Exception as _e:
+            print(f"[dashboard] resolve winner status error: {_e}", file=sys.stderr)
+        try:
+            await _update_decision_status(body.loser_id, "superseded")
+        except Exception as _e:
+            print(f"[dashboard] resolve loser status error: {_e}", file=sys.stderr)
+
+    # Rewrite contradictions.jsonl
     path = smm_dir / "contradictions.jsonl"
     try:
+        smm_dir.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             for entry in updated:
                 f.write(json.dumps(entry) + "\n")
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    # Update contradiction_index.json so the pair is never re-flagged
+    try:
+        title_a = resolved_entry.get("decision_a", "")
+        title_b = resolved_entry.get("decision_b", "")
+        note_str = body.note if body.winner_id else (body.resolution or "")
+        if title_a and title_b:
+            from smm_sync.contradiction_index import record_action as _record_action
+            await asyncio.to_thread(
+                _record_action, smm_dir, title_a, title_b, "resolved", note_str, "dashboard"
+            )
+    except Exception as _e:
+        print(f"[dashboard] resolve_contradiction index update error: {_e}", file=sys.stderr)
+
+    # Write audit entry
+    try:
+        _surfaced = [t for t in [winner_title, loser_title] if t]
+        if not _surfaced:
+            _surfaced = [t for t in [resolved_entry.get("decision_a", ""), resolved_entry.get("decision_b", "")] if t]
+        audit_entry = {
+            "event_type": "contradiction_resolved",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "contradiction_id": contradiction_id,
+            "decision_title": resolved_entry.get("decision_a", ""),
+            "winner": winner_title,
+            "loser": loser_title,
+            "note": body.note if body.winner_id else (body.resolution or ""),
+            "agent": "dashboard",
+            "actor": "dashboard",
+            "session_id": "",
+            "decisions_surfaced": _surfaced,
+            "decision_count": 1,
+        }
+        lineage_path = smm_dir / "compliance_lineage.jsonl"
+        _write_hashed_audit(lineage_path, audit_entry)
+    except Exception as _e:
+        print(f"[dashboard] resolve_contradiction audit write error: {_e}", file=sys.stderr)
+
+    return {"success": True}
+
+
+# ---------------------------------------------------------------------------
+# /api/contradictions/{id}/ignore
+# ---------------------------------------------------------------------------
+
+class IgnoreBody(BaseModel):
+    """Optional body for POST /api/contradictions/{id}/ignore."""
+
+    reason: str = ""
+
+
+@app.post("/api/contradictions/{contradiction_id}/ignore")
+async def ignore_contradiction(contradiction_id: str, body: IgnoreBody = IgnoreBody()) -> dict:
+    """Mark a contradiction as ignored (detection was wrong / not a real conflict).
+
+    Writes status='ignored' to contradictions.jsonl and records the pair in
+    contradiction_index.json so it is never re-flagged.
+
+    Args:
+        contradiction_id: Contradiction UUID.
+        body: Optional body with reason field.
+
+    Returns:
+        Dict with success flag.
+    """
+    smm_dir = _get_smm_dir()
+    raw = await asyncio.to_thread(_read_contradictions, smm_dir)
+
+    updated: list[dict] = []
+    found = False
+    ignored_entry: dict = {}
+    for c in raw:
+        if c.get("id") == contradiction_id:
+            c["resolved"] = True
+            c["resolved_at"] = datetime.now(timezone.utc).isoformat()
+            c["resolved_by"] = "dashboard"
+            c["status"] = "ignored"
+            if body.reason:
+                c["ignore_reason"] = body.reason
+            ignored_entry = dict(c)
+            found = True
+        updated.append(c)
+
+    if not found:
+        raise HTTPException(status_code=404, detail="Contradiction not found")
+
+    # Rewrite contradictions.jsonl
+    path = smm_dir / "contradictions.jsonl"
+    try:
+        smm_dir.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            for entry in updated:
+                f.write(json.dumps(entry) + "\n")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    # Record in contradiction_index.json so this pair is never re-flagged
+    try:
+        title_a = ignored_entry.get("decision_a", "")
+        title_b = ignored_entry.get("decision_b", "")
+        if title_a and title_b:
+            from smm_sync.contradiction_index import record_action as _record_action
+            await asyncio.to_thread(
+                _record_action, smm_dir, title_a, title_b, "ignored", "", "dashboard"
+            )
+    except Exception as _e:
+        print(f"[dashboard] ignore_contradiction index update error: {_e}", file=sys.stderr)
 
     return {"success": True}
 
@@ -619,168 +1276,395 @@ async def resolve_contradiction(contradiction_id: str, body: ResolveBody) -> dic
 
 @app.get("/api/compliance")
 async def get_compliance(
-    limit: int = Query(20, ge=1, le=500),
+    limit: int = Query(2000, ge=1, le=5000),
+    from_date: str = Query("", description="Start date YYYY-MM-DD"),
+    to_date: str = Query("", description="End date YYYY-MM-DD"),
     session_id: str = Query(""),
     decision_title: str = Query(""),
 ) -> dict:
-    """Return compliance lineage entries with optional filters.
+    """Return compliance audit log: decisions added, contradictions, context injections.
+
+    Merges compliance_lineage.jsonl with synthesised events from contradictions.jsonl.
+    Deduplicates re-sync noise and sorts by timestamp descending.
 
     Args:
-        limit: Max entries to return.
-        session_id: Filter to specific session.
-        decision_title: Filter to entries surfacing a specific decision.
+        limit: Max entries to return (default 2000).
+        from_date: ISO date string to filter entries on or after (inclusive).
+        to_date: ISO date string to filter entries on or before (inclusive).
+        session_id: Filter to a specific session id.
+        decision_title: Filter entries surfacing a specific decision.
 
     Returns:
-        Dict with entries list and total count.
+        Dict with entries list, total count, and summary counts.
     """
     smm_dir = _get_smm_dir()
-    all_entries = await asyncio.to_thread(_read_compliance_log, smm_dir)
+    raw: list[dict] = await asyncio.to_thread(_read_compliance_log, smm_dir)
 
-    filtered = all_entries
+    # Normalise title field — compliance log uses "title" in some writers, "decision_title" in others
+    for e in raw:
+        if not e.get("decision_title") and e.get("title"):
+            e["decision_title"] = e["title"]
+
+    # Enrich decision_recorded entries with rationale/confidence/type/alternatives/constraints
+    try:
+        jsonl_rows = await asyncio.to_thread(_read_decisions_jsonl, smm_dir)
+        dec_lookup: dict[str, dict] = {
+            d.get("uuid", ""): {
+                "rationale":      d.get("rationale", ""),
+                "confidence":     d.get("confidence", 0.80),
+                "decision_type":  _normalize_decision_type(d.get("type", "technical")),
+                "decision_title": d.get("title", ""),
+                "alternatives":   d.get("alternatives", ""),
+                "constraints":    d.get("constraints", ""),
+                "made_by":        d.get("made_by", ""),
+            }
+            for d in jsonl_rows
+            if d.get("uuid")
+        }
+        for e in raw:
+            if e.get("event_type") in ("decision_recorded", "decision_added"):
+                uuid_val = e.get("decision_uuid", "")
+                if uuid_val and uuid_val in dec_lookup:
+                    info = dec_lookup[uuid_val]
+                    if not e.get("rationale"):      e["rationale"]      = info["rationale"]
+                    if not e.get("confidence"):     e["confidence"]     = info["confidence"]
+                    if not e.get("decision_type"):  e["decision_type"]  = info["decision_type"]
+                    if not e.get("decision_title"): e["decision_title"] = info["decision_title"]
+                    if not e.get("alternatives"):   e["alternatives"]   = info["alternatives"]
+                    if not e.get("constraints"):    e["constraints"]    = info["constraints"]
+                    if not e.get("made_by"):        e["made_by"]        = info["made_by"]
+            elif e.get("event_type") == "decision_superseded" and not e.get("decision_title"):
+                sup_uuid = e.get("superseded_uuid", "")
+                sup_by_uuid = e.get("superseded_by_uuid", "")
+                sup_title = dec_lookup.get(sup_uuid, {}).get("decision_title", "")
+                sup_by_title = dec_lookup.get(sup_by_uuid, {}).get("decision_title", "")
+                if sup_title:
+                    e["decision_title"] = "Superseded: " + sup_title
+                    if sup_by_title:
+                        e["decision_title"] += " → " + sup_by_title
+                elif sup_by_title:
+                    e["decision_title"] = "Superseded by: " + sup_by_title
+    except Exception as _de:
+        print(f"[dashboard] get_compliance decision enrichment error: {_de}", file=sys.stderr)
+
+    # Synthesise contradiction events (smm check writes to contradictions.jsonl,
+    # not to compliance_lineage.jsonl, so we add them here).
+    try:
+        contradictions = await asyncio.to_thread(_read_contradictions, smm_dir)
+        # Build set of contradiction_ids already resolved in lineage to avoid double-counting
+        _lineage_resolved_ids: set[str] = {
+            e.get("contradiction_id", "")
+            for e in raw
+            if e.get("event_type") in ("contradiction_resolved", "contradiction_dismissed")
+            and e.get("contradiction_id")
+        }
+        # Deduplicate synthesised events by contradiction_id to avoid double-counting
+        # entries already present in compliance_lineage.jsonl
+        _lineage_detected_ids: set[str] = {
+            e.get("contradiction_id", "")
+            for e in raw
+            if e.get("event_type") == "contradiction_detected"
+            and e.get("contradiction_id")
+        }
+        for c in contradictions:
+            cid = c.get("id", "") or ""
+            da = c.get("decision_a", "")
+            db = c.get("decision_b", "")
+            title_str = f"{da[:45]} ↔ {db[:45]}" if da and db else cid
+            # Only synthesise detected event if not already in lineage
+            if cid and cid not in _lineage_detected_ids:
+                raw.append({
+                    "entry_id": cid + "-detected",
+                    "contradiction_id": cid,
+                    "timestamp": c.get("detected_at") or c.get("timestamp", ""),
+                    "event_type": "contradiction_detected",
+                    "decision_title": title_str,
+                    "decision_a": da,
+                    "decision_b": db,
+                    "explanation": c.get("explanation") or c.get("reason", ""),
+                    "agent": "smm-check",
+                })
+            if c.get("resolved") and cid not in _lineage_resolved_ids:
+                ev = "contradiction_dismissed" if c.get("status") in ("ignored", "dismissed") else "contradiction_resolved"
+                _resolver = c.get("resolved_by", "") or "pm-reviewer"
+                raw.append({
+                    "entry_id": cid + "-resolved",
+                    "contradiction_id": cid,
+                    "timestamp": c.get("resolved_at", ""),
+                    "event_type": ev,
+                    "decision_title": title_str,
+                    "winner": c.get("resolved_winner") or c.get("winner", ""),
+                    "ignore_reason": c.get("ignore_reason", ""),
+                    "agent": "manual-review",
+                    "reviewer": _resolver,
+                })
+    except Exception as _ce:
+        print(f"[dashboard] get_compliance contradiction merge error: {_ce}", file=sys.stderr)
+
+    # Sort most-recent first
+    raw.sort(key=lambda e: e.get("timestamp", "") or "", reverse=True)
+
+    # Deduplicate: by entry_id, and throttle context_injection to 1 per agent per minute
+    seen_ids: set[str] = set()
+    seen_ci: set[str] = set()
+    deduped: list[dict] = []
+    for e in raw:
+        eid = e.get("entry_id", "") or ""
+        if eid:
+            if eid in seen_ids:
+                continue
+            seen_ids.add(eid)
+        if e.get("event_type") == "context_injection":
+            ci_key = f"{e.get('agent', '')}-{(e.get('timestamp', '') or '')[:16]}"
+            if ci_key in seen_ci:
+                continue
+            seen_ci.add(ci_key)
+        deduped.append(e)
+
+    # Date + field filters
+    all_filtered = deduped
+    if from_date:
+        all_filtered = [e for e in all_filtered if (e.get("timestamp", "") or "") >= from_date]
+    if to_date:
+        to_end = to_date + "T23:59:59"
+        all_filtered = [e for e in all_filtered if (e.get("timestamp", "") or "") <= to_end]
     if session_id:
-        filtered = [e for e in filtered if e.get("session_id") == session_id]
+        all_filtered = [e for e in all_filtered if e.get("session_id") == session_id]
     if decision_title:
-        filtered = [e for e in filtered if decision_title in e.get("decisions_surfaced", [])]
+        all_filtered = [e for e in all_filtered if decision_title in (e.get("decisions_surfaced") or [])]
 
-    total = len(filtered)
-    # Return most recent first
-    paginated = list(reversed(filtered))[:limit]
+    summary = {
+        "decisions_added": sum(1 for e in all_filtered if e.get("event_type") == "decision_recorded"),
+        "contradictions_detected": sum(1 for e in all_filtered if e.get("event_type") == "contradiction_detected"),
+        "contradictions_resolved": sum(1 for e in all_filtered if e.get("event_type") == "contradiction_resolved"),
+        "contradictions_dismissed": sum(1 for e in all_filtered if e.get("event_type") == "contradiction_dismissed"),
+        "context_injections": sum(1 for e in all_filtered if e.get("event_type") == "context_injection"),
+    }
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    deja_vu_count_today = sum(
-        1 for e in all_entries
-        if e.get("timestamp", "").startswith(today)
-        and e.get("event_type") == "context_injection"
-        and any(
-            kw in str(e.get("decisions_surfaced", "")).lower()
-            for kw in ("rejected", "alternative", "considered", "discarded")
+    total = len(all_filtered)
+    paginated = all_filtered[:limit]
+    return {"entries": paginated, "total": total, "summary": summary}
+
+
+# ---------------------------------------------------------------------------
+# /api/compliance/verify
+# ---------------------------------------------------------------------------
+
+@app.get("/api/compliance/verify")
+async def verify_compliance_integrity() -> dict:
+    """Verify the SHA-256 hash chain of compliance_lineage.jsonl.
+
+    Recomputes every stored content_hash and validates prev_hash links.
+    Returns the first broken entry index, or a clean bill of health.
+
+    Returns:
+        Dict with valid flag, total count, hashed count, and human message.
+    """
+    smm_dir = _get_smm_dir()
+    lineage_path = smm_dir / "compliance_lineage.jsonl"
+
+    if not lineage_path.exists():
+        return {"valid": True, "total": 0, "hashed": 0, "message": "No entries to verify"}
+
+    entries: list[dict] = await asyncio.to_thread(_read_compliance_log, smm_dir)
+    if not entries:
+        return {"valid": True, "total": 0, "hashed": 0, "message": "No entries to verify"}
+
+    hashed_count = sum(1 for e in entries if e.get("content_hash"))
+    if hashed_count == 0:
+        return {
+            "valid": True, "total": len(entries), "hashed": 0,
+            "message": f"{len(entries)} legacy entries (no hashes yet) — integrity check not applicable",
+        }
+
+    broken_at: int | None = None
+    prev_hash = "GENESIS"
+
+    for i, entry in enumerate(entries):
+        stored_hash = entry.get("content_hash")
+        if not stored_hash:
+            continue  # legacy entry, skip
+        stored_prev = entry.get("prev_hash")
+        if stored_prev is not None and stored_prev != prev_hash:
+            broken_at = i + 1
+            break
+        base = {k: v for k, v in entry.items() if k not in ("content_hash", "prev_hash")}
+        canonical = json.dumps(base, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        expected = hashlib.sha256(canonical.encode()).hexdigest()
+        if expected != stored_hash:
+            broken_at = i + 1
+            break
+        prev_hash = stored_hash
+
+    if broken_at is not None:
+        broken_entry = entries[broken_at - 1] if broken_at <= len(entries) else {}
+        broken_title = (
+            broken_entry.get("decision_title")
+            or broken_entry.get("title")
+            or broken_entry.get("entry_id", "")
         )
-    )
+        entries_after = len(entries) - broken_at
+        return {
+            "valid": False,
+            "total": len(entries),
+            "hashed": hashed_count,
+            "broken_at": broken_at,
+            "broken_title": broken_title,
+            "entries_after": entries_after,
+            "message": f"Chain broken at entry {broken_at} — possible tampering detected",
+        }
 
-    return {"entries": paginated, "total": total, "deja_vu_count_today": deja_vu_count_today}
+    return {
+        "valid": True,
+        "total": len(entries),
+        "hashed": hashed_count,
+        "message": f"All {hashed_count} entries verified — chain intact",
+    }
 
 
 # ---------------------------------------------------------------------------
-# /api/decisions/export/pdf
+# /api/decisions/export/pdf  — printable HTML (user Cmd+P to save as PDF)
+# /api/decisions/export/csv  — CSV download
 # ---------------------------------------------------------------------------
+
+def _decisions_project_name(smm_dir: Path) -> str:
+    """Return project display name from config.json, falling back to directory name."""
+    try:
+        cfg_path = smm_dir / "config.json"
+        if cfg_path.exists():
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            return cfg.get("repo_name") or cfg.get("project") or smm_dir.parent.name
+    except Exception:
+        pass
+    return smm_dir.parent.name
+
 
 @app.get("/api/decisions/export/pdf")
-async def export_decisions_pdf() -> StreamingResponse:
-    """Export all decisions as a formatted PDF.
+async def export_decisions_pdf() -> Response:
+    """Return a printable HTML page of all decisions.
 
-    Used by QA for formal sign-off documentation.
+    Opens in a new browser tab; user presses Cmd+P / Ctrl+P to save as PDF.
 
     Returns:
-        PDF file as StreamingResponse.
+        HTML Response with print stylesheet.
     """
     smm_dir = _get_smm_dir()
-    entries = await asyncio.to_thread(_read_compliance_log, smm_dir)
-    decision_entries = [e for e in entries if e.get("event_type") == "decision_added"]
+    rows = await asyncio.to_thread(_read_decisions_jsonl, smm_dir)
+    project = _decisions_project_name(smm_dir)
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    # Try to get decisions from graph
-    decisions: list[dict] = []
-    try:
-        client_obj = _get_graph_client()
-        if client_obj is not None:
-            raw = await client_obj.get_all_decisions(project="smm-sync", limit=500)
-            decisions = [
-                {
-                    "title": d.title,
-                    "rationale": d.content or d.excerpt or "",
-                    "type": getattr(d, "source_type", "architectural"),
-                    "confidence": getattr(d, "relevance_score", 0.85),
-                    "date": getattr(d, "created_at", ""),
-                    "is_constraint": getattr(d, "is_constraint", False),
-                }
-                for d in (raw or [])
-            ]
-    except Exception as e:
-        print(f"[dashboard] export_decisions_pdf graph query error: {e}", file=sys.stderr)
+    def esc(v: object) -> str:
+        return (
+            str(v or "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+        )
 
-    if not decisions:
-        decisions = [
-            {
-                "title": e.get("decision_title", "Unknown"),
-                "rationale": "",
-                "type": "captured",
-                "confidence": e.get("confidence", 0.85),
-                "date": e.get("timestamp", ""),
-                "is_constraint": False,
-            }
-            for e in decision_entries
-        ]
+    rows_html = []
+    for i, d in enumerate(rows, 1):
+        raw_conf = float(d.get("confidence", 0.80) or 0.80)
+        conf = raw_conf / 100.0 if raw_conf > 1.0 else raw_conf
+        conf_str = f"{round(conf * 100)}%"
+        dtype = _normalize_decision_type(d.get("type", "technical"))
+        date_str = (d.get("timestamp") or "")[:10]
+        agent = esc(d.get("made_by") or d.get("source") or "—")
+        rows_html.append(
+            f"<tr>"
+            f"<td>{i}</td>"
+            f"<td>{esc(d.get('title', ''))}</td>"
+            f"<td>{esc(dtype)}</td>"
+            f"<td>{conf_str}</td>"
+            f"<td>{esc((d.get('rationale') or '')[:200])}</td>"
+            f"<td>{date_str}</td>"
+            f"<td>{agent}</td>"
+            f"</tr>"
+        )
 
-    import io
-    buf = io.BytesIO()
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Axiom Hub — Decision Registry</title>
+<style>
+  @media print {{ @page {{ margin: 1.5cm; }} }}
+  body {{ font-family: -apple-system, Helvetica, Arial, sans-serif; font-size: 11px; color: #111; margin: 24px; }}
+  h1 {{ font-size: 20px; margin-bottom: 4px; }}
+  .meta {{ color: #666; font-size: 11px; margin-bottom: 16px; }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  th {{ background: #f4f4f0; text-align: left; padding: 6px 8px; font-size: 10px;
+        text-transform: uppercase; letter-spacing: .5px; border-bottom: 2px solid #ddd; }}
+  td {{ padding: 5px 8px; border-bottom: 1px solid #eee; vertical-align: top; }}
+  td:first-child {{ color: #aaa; width: 28px; }}
+  td:nth-child(3) {{ white-space: nowrap; font-size: 10px; }}
+  td:nth-child(4) {{ white-space: nowrap; font-weight: 600; }}
+  td:nth-child(5) {{ color: #555; max-width: 320px; }}
+  td:nth-child(6) {{ white-space: nowrap; color: #888; }}
+  td:nth-child(7) {{ white-space: nowrap; color: #888; }}
+  tr:hover td {{ background: #fafaf8; }}
+</style>
+</head>
+<body>
+<h1>Axiom Hub — Decision Registry</h1>
+<div class="meta">
+  Project: <strong>{esc(project)}</strong> &nbsp;·&nbsp;
+  Generated: {now_str} &nbsp;·&nbsp;
+  Total: {len(rows)} decisions
+</div>
+<table>
+  <thead><tr>
+    <th>#</th><th>Title</th><th>Type</th><th>Confidence</th>
+    <th>Rationale</th><th>Date</th><th>Agent</th>
+  </tr></thead>
+  <tbody>
+  {"".join(rows_html)}
+  </tbody>
+</table>
+</body>
+</html>"""
 
-    if _PDF_AVAILABLE:
-        from reportlab.lib.pagesizes import letter
-        from reportlab.lib.units import inch
-        from reportlab.lib.styles import getSampleStyleSheet
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
-        from reportlab.lib.enums import TA_LEFT
-        from reportlab.lib import colors
-        from reportlab.lib.styles import ParagraphStyle
+    return Response(content=html, media_type="text/html; charset=utf-8")
 
-        doc = SimpleDocTemplate(buf, pagesize=letter, topMargin=0.75*inch, bottomMargin=0.75*inch,
-                                leftMargin=inch, rightMargin=inch)
-        styles = getSampleStyleSheet()
-        story = []
 
-        title_style = ParagraphStyle('title', fontSize=18, fontName='Helvetica-Bold', spaceAfter=6)
-        meta_style = ParagraphStyle('meta', fontSize=10, fontName='Helvetica', textColor=colors.grey, spaceAfter=4)
-        dec_title_style = ParagraphStyle('dec_title', fontSize=12, fontName='Helvetica-Bold', spaceAfter=4)
-        body_style = ParagraphStyle('body', fontSize=10, fontName='Helvetica', spaceAfter=6, leading=14)
-        label_style = ParagraphStyle('label', fontSize=9, fontName='Helvetica-Bold', textColor=colors.grey, spaceAfter=2)
+@app.get("/api/decisions/export/csv")
+async def export_decisions_csv() -> StreamingResponse:
+    """Export all decisions as a CSV file.
 
-        story.append(Paragraph("CaaS Decision Registry", title_style))
-        story.append(Paragraph(f"Project: smm-sync", meta_style))
-        story.append(Paragraph(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}", meta_style))
-        story.append(Paragraph(f"Total: {len(decisions)} decisions", meta_style))
-        story.append(Spacer(1, 12))
-        story.append(HRFlowable(width="100%", thickness=1, color=colors.lightgrey))
-        story.append(Spacer(1, 12))
+    Returns:
+        CSV StreamingResponse with columns:
+        Title, Type, Confidence, Rationale, Alternatives, Constraints, Date, Agent, UUID
+    """
+    smm_dir = _get_smm_dir()
+    rows = await asyncio.to_thread(_read_decisions_jsonl, smm_dir)
 
-        for i, d in enumerate(decisions, 1):
-            story.append(Paragraph(f"{i}. {d['title']}", dec_title_style))
-            conf = d.get('confidence', 0)
-            dtype = d.get('type', 'architectural')
-            date_str = d.get('date', '')[:10] if d.get('date') else ''
-            story.append(Paragraph(f"Type: {dtype} | Confidence: {conf:.2f} | Date: {date_str}", label_style))
-            rationale = d.get('rationale', '')
-            if rationale:
-                story.append(Paragraph(rationale[:500], body_style))
-            story.append(HRFlowable(width="100%", thickness=0.5, color=colors.lightgrey))
-            story.append(Spacer(1, 8))
+    import io, csv as _csv
 
-        doc.build(story)
-    else:
-        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        lines = [
-            "CaaS Decision Registry",
-            f"Project: smm-sync",
-            f"Generated: {now_str}",
-            f"Total: {len(decisions)} decisions",
-            "",
-            "=" * 60,
-            "",
-        ]
-        for i, d in enumerate(decisions, 1):
-            lines.append(f"{i}. {d['title']}")
-            lines.append(f"   Type: {d.get('type','?')} | Confidence: {d.get('confidence',0):.2f}")
-            if d.get('rationale'):
-                lines.append(f"   {d['rationale'][:200]}")
-            lines.append("")
+    buf = io.StringIO()
+    writer = _csv.writer(buf, quoting=_csv.QUOTE_ALL)
+    writer.writerow(["Title", "Type", "Confidence", "Rationale", "Alternatives",
+                     "Constraints", "Date", "Agent", "UUID"])
+    for d in rows:
+        raw_conf = float(d.get("confidence", 0.80) or 0.80)
+        conf = raw_conf / 100.0 if raw_conf > 1.0 else raw_conf
+        dtype = _normalize_decision_type(d.get("type", "technical"))
+        writer.writerow([
+            d.get("title", ""),
+            dtype,
+            f"{round(conf * 100)}%",
+            d.get("rationale", ""),
+            d.get("alternatives", ""),
+            d.get("constraints", ""),
+            (d.get("timestamp") or "")[:10],
+            d.get("made_by") or d.get("source") or "",
+            d.get("uuid", ""),
+        ])
 
-        text = "\n".join(lines)
-        _write_simple_pdf(buf, text, "CaaS Decision Registry")
-
-    buf.seek(0)
-    filename = f"caas-decisions-{datetime.now(timezone.utc).strftime('%Y%m%d')}.pdf"
+    date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
     return StreamingResponse(
-        buf,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        iter([buf.getvalue().encode("utf-8-sig")]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="decisions-{date_str}.csv"'},
     )
 
 
@@ -1097,7 +1981,8 @@ def _read_killed_sessions(smm_dir: Path) -> set[str]:
 async def get_graph() -> dict:
     """Return graph nodes and edges for D3 visualization.
 
-    Falls back to empty graph on any error.
+    Primary source: Kuzu graph.
+    Fallback: decisions.jsonl + contradictions.jsonl when Kuzu is empty.
 
     Returns:
         Dict with nodes and edges lists.
@@ -1105,14 +1990,16 @@ async def get_graph() -> dict:
     smm_dir = _get_smm_dir()
     nodes: list[dict] = []
     edges: list[dict] = []
+    _kuzu_decisions: list = []
 
+    # ── Step 1: Try Kuzu for nodes and its own edges ──────────────────────────
     try:
         client = _get_graph_client()
         if client is None:
             raise RuntimeError("Graph client unavailable")
-        decisions = await client.get_decisions(project="smm-sync")
+        _kuzu_decisions = await client.get_decisions(project="smm-sync")
 
-        for d in decisions:
+        for d in _kuzu_decisions:
             created_at = d.created_at
             date_str = ""
             if hasattr(created_at, "strftime"):
@@ -1126,65 +2013,196 @@ async def get_graph() -> dict:
             source_type = "manual"
             source_pr: str | None = None
             overrides: str | None = None
+            node_status = ""
             for line in (d.content or "").splitlines():
                 if line.startswith("Confidence:"):
                     try:
                         confidence = float(line.split(":", 1)[1].strip())
-                    except Exception as e:
-                        print(f"[dashboard] get_graph confidence parse error: {e}", file=sys.stderr)
+                    except Exception:
+                        pass
                 if line.startswith("Rationale:"):
                     rationale = line.split(":", 1)[1].strip()
                 if "Decision type:" in line:
-                    decision_type = line.split(":", 1)[1].strip().lower()
+                    decision_type = _normalize_decision_type(line.split(":", 1)[1].strip())
                 if line.startswith("Source type:"):
                     source_type = line.split(":", 1)[1].strip().lower()
                 if line.startswith("Source PR:"):
                     source_pr = line.split(":", 1)[1].strip().lstrip("#")
                 if line.startswith("Overrides:"):
                     overrides = line.split(":", 1)[1].strip()
+                if line.startswith("Status:"):
+                    node_status = line.split(":", 1)[1].strip().lower()
 
-            # Try to extract PR number from content if source is github_pr
             if source_type == "github_pr" and not source_pr:
                 import re as _re
                 m = _re.search(r"PR\s*#?(\d+)", d.content or "")
                 if m:
                     source_pr = m.group(1)
 
+            is_superseded = node_status == "superseded"
             nodes.append({
                 "id": str(d.id),
                 "label": d.title or "(untitled)",
-                "type": decision_type,
+                "type": "superseded" if is_superseded else decision_type,
                 "confidence": confidence,
                 "source_type": source_type,
                 "source_pr": source_pr,
-                "source_url": None,  # constructed on frontend using repo_owner/repo_name
+                "source_url": None,
                 "date": date_str,
                 "rationale": rationale,
                 "overrides": overrides,
+                "superseded": is_superseded,
+                "superseded_by": "",
+                "superseded_at": "",
             })
 
-        # Do not filter all-uppercase labels here.
-        # Legitimate decisions can have titles like "AFFECTS", and the old
-        # regex removed them, causing /graph to render "No decisions yet".
+        # Build uuid→node-id lookup
+        uuid_to_id: dict[str, str] = {}
+        try:
+            raw_uuid_rows, _, _ = await client._driver.execute_query(
+                "MATCH (e:Episodic) RETURN e.uuid, e.name ORDER BY e.created_at ASC"
+            )
+            for row in raw_uuid_rows:
+                ep_uuid = row.get("e.uuid", "")
+                ep_name = row.get("e.name", "")
+                for n in nodes:
+                    if n["label"] == ep_name or n["label"].rstrip("…") == ep_name[:20]:
+                        uuid_to_id[ep_uuid] = n["id"]
+                        break
+        except Exception:
+            pass
 
-        # Detect supersedes edges from content
-        title_to_id = {n["label"]: n["id"] for n in nodes}
-        for d in decisions:
+        # Kuzu DecisionEdge edges
+        graph_edges = await client.get_edges(project="smm-sync")
+        _TYPE_MAP = {
+            "SUPERSEDES": "supersedes",
+            "PREFERRED_OVER": "supersedes",
+            "ENABLES": "enables",
+            "REQUIRES": "uses",
+            "RELATES_TO": "related",
+            "CONTRADICTS": "supersedes",
+        }
+        for ge in graph_edges:
+            src_id = uuid_to_id.get(ge["source_uuid"])
+            tgt_id = uuid_to_id.get(ge["target_uuid"])
+            if src_id and tgt_id and src_id != tgt_id:
+                edges.append({
+                    "source": src_id,
+                    "target": tgt_id,
+                    "type": _TYPE_MAP.get(ge["edge_type"], "related"),
+                })
+
+    except Exception as _kuzu_exc:
+        print(f"[dashboard] get_graph kuzu error: {_kuzu_exc}", file=sys.stderr)
+
+    # ── Step 2: JSONL fallback when Kuzu returned no nodes ───────────────────
+    if not nodes:
+        _jsonl = await asyncio.to_thread(_read_decisions_jsonl, smm_dir)
+        for d in _jsonl:
+            _raw_conf = float(d.get("confidence", 0.80) or 0.80)
+            _conf = _raw_conf / 100.0 if _raw_conf > 1.0 else _raw_conf
+            nodes.append({
+                "id": d.get("uuid") or str(uuid.uuid4()),
+                "label": d.get("title", "(untitled)"),
+                "type": _normalize_decision_type(d.get("type", "technical")),
+                "confidence": _conf,
+                "source_type": d.get("source", "manual"),
+                "source_pr": None,
+                "source_url": None,
+                "date": (d.get("timestamp", ""))[:10],
+                "rationale": d.get("rationale", ""),
+                "overrides": None,
+                "superseded": False,
+                "superseded_by": "",
+                "superseded_at": "",
+            })
+
+    # ── Step 3: Edges from contradictions.jsonl (always runs) ────────────────
+    title_to_id = {n["label"]: n["id"] for n in nodes}
+    existing_pairs = {(e["source"], e["target"]) for e in edges}
+
+    try:
+        all_contras = await asyncio.to_thread(_read_contradictions, smm_dir)
+        for rc in all_contras:
+            is_resolved = rc.get("resolved", False)
+            is_dismissed = rc.get("status") in ("ignored", "dismissed")
+            da = rc.get("decision_a", "")
+            db = rc.get("decision_b", "")
+
+            if is_resolved and not is_dismissed:
+                winner = rc.get("winner") or rc.get("resolved_winner", "")
+                loser = rc.get("loser", "")
+                if not loser and winner:
+                    loser = db if winner == da else (da if winner == db else "")
+                resolved_at = (rc.get("resolved_at", "") or "")[:10]
+                winner_nid = title_to_id.get(winner)
+                loser_nid = title_to_id.get(loser)
+                if loser_nid:
+                    for n in nodes:
+                        if n["id"] == loser_nid:
+                            n["superseded"] = True
+                            n["superseded_by"] = winner
+                            n["superseded_at"] = resolved_at
+                            n["type"] = "superseded"
+                            break
+                if winner_nid and loser_nid and winner_nid != loser_nid:
+                    pair = (winner_nid, loser_nid)
+                    if pair not in existing_pairs:
+                        edges.append({
+                            "source": winner_nid,
+                            "target": loser_nid,
+                            "type": "supersedes",
+                            "label": "SUPERSEDES",
+                        })
+                        existing_pairs.add(pair)
+            elif not is_resolved and not is_dismissed:
+                da_nid = title_to_id.get(da)
+                db_nid = title_to_id.get(db)
+                if da_nid and db_nid and da_nid != db_nid:
+                    pair = (da_nid, db_nid)
+                    rpair = (db_nid, da_nid)
+                    if pair not in existing_pairs and rpair not in existing_pairs:
+                        edges.append({"source": da_nid, "target": db_nid, "type": "contradicts"})
+                        existing_pairs.add(pair)
+    except Exception as _rc_exc:
+        print(f"[dashboard] get_graph contradictions error: {_rc_exc}", file=sys.stderr)
+
+    # Legacy: edges from "Contradictions detected:" text in Kuzu content
+    if _kuzu_decisions:
+        for d in _kuzu_decisions:
             content = d.content or ""
             if "Contradictions detected:" in content:
                 after = content.split("Contradictions detected:", 1)[1]
                 for part in after.split(","):
                     related_title = part.strip().rstrip(".")
-                    if related_title in title_to_id and str(d.id) != title_to_id[related_title]:
-                        edges.append({
-                            "source": str(d.id),
-                            "target": title_to_id[related_title],
-                            "type": "supersedes",
-                        })
-    except Exception as _exc:
-        print(f"[dashboard] get_graph error: {_exc}", file=sys.stderr)
+                    tgt = title_to_id.get(related_title)
+                    src = str(d.id)
+                    if tgt and src != tgt and (src, tgt) not in existing_pairs:
+                        edges.append({"source": src, "target": tgt, "type": "supersedes"})
+                        existing_pairs.add((src, tgt))
 
     return {"nodes": nodes, "edges": edges}
+
+
+@app.post("/api/graph/rebuild-edges")
+async def rebuild_edges():
+    """Rebuild all edges between decisions using local embedding similarity.
+
+    Runs discover_edges() across the full graph — zero API credits.
+    Uses the shared all-MiniLM-L6-v2 sentence-transformers model.
+    Safe to call multiple times (deduplicates before writing).
+
+    Returns:
+        Dict with nodes_scanned, edges_created, edges_skipped counts.
+    """
+    client = _get_graph_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Graph client unavailable")
+    try:
+        result = await client.discover_edges(project="smm-sync")
+        return {"success": True, **result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.delete("/api/graph/reset")
@@ -1284,45 +2302,165 @@ class DecisionCreate(BaseModel):
     type: str = "architectural"
     is_constraint: bool = False
     source_type: str = "manual"
+    # Extra fields so CLI route-through sends its full structured data.
+    # All optional with defaults so existing dashboard form POSTs still work.
+    content: str = ""
+    made_by: str = "dashboard"
+    decision_type: str = ""   # falls back to `type` when empty
+    constraints: list[str] = []
+    confidence: Optional[float] = None  # Bug 7: pass CLI confidence through
 
 
 @app.post("/api/decisions")
 async def create_decision(decision: DecisionCreate) -> dict:
-    """Create a new decision from the dashboard.
+    """Create a new decision from the dashboard or CLI route-through.
 
-    Used by BA and non-technical team members.
-    Calls GraphClient.add_decision() directly.
-    Requires ANTHROPIC_API_KEY to be set.
+    Bug 1 fix: uses add_decision_local() (zero API calls) so this works
+    whether or not ANTHROPIC_API_KEY is set, and serves as the lock-safe
+    write path when the CLI detects the dashboard holds the Kuzu connection.
 
     Args:
-        decision: DecisionCreate payload from the form.
+        decision: DecisionCreate payload from the form or CLI.
 
     Returns:
-        Dict with success bool and decision id.
+        Dict with success bool and decision id string.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="ANTHROPIC_API_KEY not set",
-        )
     try:
         gc = _get_graph_client()
         if gc is None:
             raise RuntimeError("Graph client unavailable")
-        content = decision.rationale
+        # `content` from CLI route-through takes precedence; fall back to rationale
+        # for requests coming from the existing dashboard UI form.
+        content = decision.content or decision.rationale
         if decision.alternatives:
             content += f"\n\nAlternatives considered: {', '.join(decision.alternatives)}"
-        result = await gc.add_decision(
+        decision_id = await gc.add_decision_local(
             title=decision.title,
             content=content,
-            source_type=decision.source_type,
+            rationale=decision.rationale,
+            made_by=decision.made_by,
             project="smm-sync",
-            is_constraint=decision.is_constraint,
+            alternatives=decision.alternatives,
+            constraints=decision.constraints,
+            decision_type=decision.decision_type or decision.type,
+            source_type=decision.source_type,
+            confidence=decision.confidence,  # Bug 7: pass CLI confidence through
         )
-        return {"success": True, "id": result.get("uuid") if isinstance(result, dict) else None}
+        return {"success": True, "id": decision_id}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# /api/decisions/{id}/approve  and  /api/decisions/{id}/reject  (Bug 6)
+# ---------------------------------------------------------------------------
+
+def _esc_cypher(s: str) -> str:
+    """Escape a string for safe embedding in a Kuzu Cypher string literal."""
+    return (
+        s.replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace("\n", "\\n")
+        .replace("\r", "")
+    )
+
+
+async def _update_decision_status(decision_id: str, new_status: str) -> dict:
+    """Update the Status line of an Episodic node and write an audit entry.
+
+    Args:
+        decision_id: UUID of the decision to update.
+        new_status: New status string ('approved' or 'rejected').
+
+    Returns:
+        Dict with success flag and new status.
+    """
+    smm_dir = _get_smm_dir()
+    gc = _get_graph_client()
+    if gc is None:
+        raise HTTPException(status_code=503, detail="Graph client unavailable")
+
+    try:
+        await gc._get_graphiti()
+        rows, _, _ = await gc._driver.execute_query(
+            f"MATCH (e:Episodic) WHERE e.uuid = '{decision_id}' RETURN e.content, e.name"
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail="Decision not found")
+
+        content = rows[0].get("e.content", "") or ""
+        _decision_title = rows[0].get("e.name", "") or ""
+        content = content.replace("\\n", "\n")
+
+        # Update or append the Status line
+        lines = content.splitlines()
+        status_replaced = False
+        new_lines = []
+        for line in lines:
+            if line.startswith("Status:"):
+                new_lines.append(f"Status: {new_status}")
+                status_replaced = True
+            else:
+                new_lines.append(line)
+        if not status_replaced:
+            new_lines.append(f"Status: {new_status}")
+
+        new_content = "\n".join(new_lines)
+        async with gc._write_lock:
+            await gc._driver.execute_query(
+                f"MATCH (e:Episodic) WHERE e.uuid = '{decision_id}' "
+                f"SET e.content = '{_esc_cypher(new_content[:8000])}'"
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    # Write audit entry
+    try:
+        audit_entry = {
+            "event_type": f"decision_{new_status}",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "decision_id": decision_id,
+            "decision_title": _decision_title,
+            "agent": "dashboard",
+            "actor": "dashboard",
+            "session_id": "",
+            "decisions_surfaced": [_decision_title] if _decision_title else [],
+            "decision_count": 1,
+        }
+        lineage_path = smm_dir / "compliance_lineage.jsonl"
+        _write_hashed_audit(lineage_path, audit_entry)
+    except Exception as _e:
+        print(f"[dashboard] _update_decision_status audit write error: {_e}", file=sys.stderr)
+
+    return {"success": True, "status": new_status}
+
+
+@app.post("/api/decisions/{decision_id}/approve")
+async def approve_decision(decision_id: str) -> dict:
+    """Mark a decision as approved.
+
+    Args:
+        decision_id: Decision UUID.
+
+    Returns:
+        Dict with success flag.
+    """
+    return await _update_decision_status(decision_id, "approved")
+
+
+@app.post("/api/decisions/{decision_id}/reject")
+async def reject_decision(decision_id: str) -> dict:
+    """Mark a decision as rejected.
+
+    Args:
+        decision_id: Decision UUID.
+
+    Returns:
+        Dict with success flag.
+    """
+    return await _update_decision_status(decision_id, "rejected")
 
 
 # ---------------------------------------------------------------------------
@@ -1619,10 +2757,69 @@ async def list_board_items(
 ) -> dict:
     """List all board items, optionally filtered by status.
 
+    Auto-populates from unresolved contradictions and deferred decisions
+    when board.json does not exist or is empty (Bug 3 fix).
+
     Returns:
         Dict with items list and grouped dict (backlog/in_progress/done).
     """
     items = await asyncio.to_thread(_load_board)
+
+    if not items:
+        # Auto-populate from contradictions and recent decisions
+        smm_dir = _get_smm_dir()
+        auto_items: list[dict] = []
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # Unresolved contradictions → backlog
+        contradictions = await asyncio.to_thread(_read_contradictions, smm_dir)
+        for c in contradictions:
+            if not c.get("resolved", False):
+                auto_items.append({
+                    "id": (c.get("id") or str(uuid.uuid4()))[:8],
+                    "title": f"Resolve: {c.get('decision_a', '')[:50]} ↔ {c.get('decision_b', '')[:50]}",
+                    "description": c.get("explanation", ""),
+                    "type": "decision",
+                    "priority": "high",
+                    "status": "backlog",
+                    "created_by": "system",
+                    "created_at": c.get("detected_at", now_iso),
+                    "updated_at": now_iso,
+                    "_source": "contradiction",
+                    "_contradiction_id": c.get("id", ""),
+                })
+
+        # Pending decisions (rejected or deferred) → in_progress
+        try:
+            gc = _get_graph_client()
+            if gc is not None:
+                raw = await gc.get_decisions(project="smm-sync")
+                for d in raw[:20]:  # cap at 20
+                    content = d.content or ""
+                    decision_status = "approved"
+                    for line in content.splitlines():
+                        if line.startswith("Status:"):
+                            decision_status = line.split(":", 1)[1].strip()
+                            break
+                    if decision_status == "pending":
+                        auto_items.append({
+                            "id": str(d.id)[:8],
+                            "title": d.title or "(untitled)",
+                            "description": "",
+                            "type": "decision",
+                            "priority": "normal",
+                            "status": "backlog",
+                            "created_by": "system",
+                            "created_at": d.created_at.isoformat() if hasattr(d.created_at, "isoformat") else str(d.created_at),
+                            "updated_at": now_iso,
+                        })
+        except Exception as _e:
+            print(f"[dashboard] list_board_items auto-populate error: {_e}", file=sys.stderr)
+
+        if auto_items:
+            items = auto_items
+            await asyncio.to_thread(_save_board, items)
+
     filtered = [i for i in items if not status or i.get("status") == status]
     grouped = {
         "backlog": [i for i in items if i.get("status") == "backlog"],
@@ -1679,7 +2876,9 @@ async def update_board_item_endpoint(item_id: str, body: dict) -> dict:
     items = await asyncio.to_thread(_load_board)
     for item in items:
         if item.get("id") == item_id:
-            for key in ("title", "description", "status", "type", "priority"):
+            allowed = {"title", "description", "status", "type", "priority",
+                       "_resolved_winner", "_resolved_rationale", "_dismissed"}
+            for key in allowed:
                 if key in body:
                     item[key] = body[key]
             item["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -1731,16 +2930,46 @@ async def resolve_board_item(item_id: str, body: dict = {}) -> dict:
             client = _get_graph_client()
             if client and body.get("decision"):
                 try:
-                    decision_id = await client.add_decision(
+                    decision_id = await client.add_decision_local(
                         title=body["decision"],
-                        content=body.get("decision", ""),
+                        content=body.get("rationale", ""),
                         rationale=body.get("rationale", ""),
                         made_by=item.get("created_by", "board"),
                         project="smm-sync",
                         alternatives=body.get("alternatives", []),
+                        decision_type="architectural",
+                        source_type="dashboard",
                     ) or decision_id
+                except AttributeError:
+                    # add_decision_local not available; fall back to old path
+                    try:
+                        decision_id = await client.add_decision(
+                            title=body["decision"],
+                            content=body.get("decision", ""),
+                            rationale=body.get("rationale", ""),
+                            made_by=item.get("created_by", "board"),
+                            project="smm-sync",
+                            alternatives=body.get("alternatives", []),
+                        ) or decision_id
+                    except Exception as e:
+                        print(f"[dashboard] resolve_board_item add_decision error: {e}", file=sys.stderr)
                 except Exception as e:
-                    print(f"[dashboard] resolve_board_item add_decision error: {e}", file=sys.stderr)
+                    print(f"[dashboard] resolve_board_item add_decision_local error: {e}", file=sys.stderr)
+
+            # Belt-and-suspenders: write to JSONL so get_project_context() injects it
+            if body.get("decision"):
+                try:
+                    from smm_sync.jsonl_writer import write_decision as _wr
+                    await asyncio.to_thread(_wr, {
+                        "title": body["decision"],
+                        "rationale": body.get("rationale", "") or body["decision"],
+                        "type": "architectural",
+                        "alternatives": body.get("alternatives", []),
+                        "source": "dashboard",
+                        "made_by": item.get("created_by", "board"),
+                    })
+                except Exception as _je:
+                    print(f"[dashboard] resolve_board_item jsonl write error: {_je}", file=sys.stderr)
 
             item["status"] = "done"
             item["linked_decision_id"] = decision_id
@@ -1842,7 +3071,7 @@ async def serve_timeline() -> FileResponse:
 # Server entry point
 # ---------------------------------------------------------------------------
 
-def run_dashboard(host: str = "127.0.0.1", port: int = 7842) -> None:
+def run_dashboard(host: str = "127.0.0.1", port: int = DEFAULT_DASHBOARD_PORT) -> None:
     """Start the CaaS dashboard server.
 
     Args:
@@ -1873,7 +3102,7 @@ def run_dashboard(host: str = "127.0.0.1", port: int = 7842) -> None:
                 # Try next port
                 port = port + 1
                 print(
-                    f"Port 7842 unavailable, using {port}",
+                    f"Port {DEFAULT_DASHBOARD_PORT} unavailable, using {port}",
                     file=sys.stderr
                 )
         finally:

@@ -379,6 +379,38 @@
       background: var(--amber-light);
     }
 
+    .stat-card-ok {
+      border-color: var(--green-border);
+      background: var(--green-light);
+    }
+
+    .stat-card-danger {
+      border-color: var(--red-border);
+      background: var(--red-light);
+    }
+
+    .hotspot-banner {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 16px;
+    }
+
+    .hotspot-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: var(--amber-light);
+      border: 1px solid var(--amber-border);
+      border-radius: 6px;
+      font-size: 12px;
+      color: var(--text-mid);
+    }
+
+    .hotspot-item .hotspot-icon { font-size: 14px; flex-shrink: 0; }
+    .hotspot-item strong { color: var(--amber); font-family: var(--mono); }
+
     .stat-label {
       font-size: 10px;
       font-weight: 600;
@@ -397,6 +429,8 @@
     }
 
     .stat-card-warn .stat-value { color: var(--amber); }
+    .stat-card-ok .stat-value { color: var(--green); }
+    .stat-card-danger .stat-value { color: var(--red); }
 
     .stat-meta {
       font-size: 11px;
@@ -682,6 +716,10 @@
       color: var(--text-muted);
       margin-bottom: 8px;
       line-height: 1.4;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
     }
 
     .contra-actions {
@@ -878,6 +916,68 @@
     }
 
     /* ─── SIDE MODAL ──────────────────────────────── */
+    .choice-cards {
+      display: flex;
+      gap: 12px;
+      margin: 16px 0;
+    }
+    .choice-card {
+      flex: 1;
+      border: 2px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      cursor: pointer;
+      transition: border-color 0.15s, opacity 0.15s, background 0.15s;
+      background: var(--surface-1);
+    }
+    .choice-card:hover {
+      border-color: var(--accent);
+      background: var(--surface-2);
+    }
+    .choice-card.selected {
+      border-color: var(--accent);
+      background: rgba(99,102,241,.08);
+      box-shadow: 0 0 0 3px rgba(99,102,241,.15);
+    }
+    .choice-card.dimmed {
+      opacity: 0.38;
+    }
+    .choice-card-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      margin-bottom: 6px;
+    }
+    .choice-card-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 6px;
+      line-height: 1.35;
+    }
+    .choice-card-rationale {
+      font-size: 11.5px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+    #resolve-note {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 8px 10px;
+      border: 1.5px solid var(--border);
+      border-radius: 6px;
+      font-size: 12px;
+      font-family: inherit;
+      background: var(--surface-1);
+      color: var(--text);
+      resize: none;
+      height: 52px;
+      margin-top: 4px;
+    }
+    #resolve-note:focus { border-color: var(--accent); outline: none; }
+
     #resolve-modal-backdrop {
       display: none;
       position: fixed;
@@ -1147,22 +1247,21 @@
         <a href="/compliance" class="nav-item">
           <span class="nav-icon">&#8863;</span>
           <span class="nav-label">Audit Trail</span>
-          <span class="nav-badge" id="nav-badge-injections">&#8212;</span>
         </a>
       </div>
 
       <div class="nav-section">
         <div class="nav-section-label">Capture</div>
-        <a href="/github" class="nav-item">
+        <span class="nav-item" style="cursor:default;opacity:0.55">
           <span class="nav-icon">&#9154;</span>
           <span class="nav-label">GitHub</span>
-          <span class="nav-badge blue" id="nav-badge-github">&#8635;</span>
-        </a>
-        <a href="/slack" class="nav-item">
+          <span class="nav-badge soon">soon</span>
+        </span>
+        <span class="nav-item" style="cursor:default;opacity:0.55">
           <span class="nav-icon">#</span>
           <span class="nav-label">Slack</span>
           <span class="nav-badge soon">soon</span>
-        </a>
+        </span>
       </div>
     </div>
 
@@ -1189,17 +1288,6 @@
       <div class="breadcrumb" id="breadcrumb">
         smm-sync <span>/</span> overview
       </div>
-      <div class="header-search">
-        <button class="search-btn" onclick="openPalette()">
-          <span>&#8981;</span>
-          Search or
-          <span class="kbd">&#8984;K</span>
-        </button>
-      </div>
-      <div class="header-actions">
-        <button class="btn" onclick="runCapture()">&#8635; Capture</button>
-        <button class="btn btn-primary" onclick="openAddDecision()">+ Decision</button>
-      </div>
     </header>
 
     <!-- CONTENT -->
@@ -1222,12 +1310,15 @@
           <div class="stat-value" id="stat-contradictions">&#8212;</div>
           <div class="stat-meta" id="stat-contradictions-meta">loading&hellip;</div>
         </div>
-        <div class="stat-card" id="card-time-saved">
-          <div class="stat-label">Time Saved</div>
-          <div class="stat-value" id="stat-time-saved">&#8212;</div>
-          <div class="stat-meta" id="stat-time-saved-meta">loading&hellip;</div>
+        <div class="stat-card" id="card-oversight">
+          <div class="stat-label">Human Oversight</div>
+          <div class="stat-value" id="stat-oversight">&#8212;</div>
+          <div class="stat-meta" id="stat-oversight-meta">loading&hellip;</div>
         </div>
       </div>
+
+      <!-- HOTSPOT BANNER -->
+      <div id="hotspot-banner" class="hotspot-banner" style="display:none"></div>
 
       <!-- MAIN CANVAS -->
       <div class="canvas">
@@ -1353,12 +1444,25 @@
       <button class="modal-close" onclick="closeModal()">&#10005;</button>
     </div>
     <div class="modal-body">
-      <div id="resolve-contradiction-title"></div>
-      <div class="modal-label">Resolution Notes</div>
-      <textarea id="resolve-notes" placeholder="Describe how this contradiction is resolved&hellip;"></textarea>
+      <div id="resolve-contradiction-title" style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px;"></div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">Choose which decision to keep:</div>
+      <div class="choice-cards">
+        <div class="choice-card" id="choice-a-card" onclick="selectChoice('a')">
+          <div class="choice-card-label">Option A</div>
+          <div class="choice-card-title" id="choice-a-title">&mdash;</div>
+          <div class="choice-card-rationale" id="choice-a-rationale">&mdash;</div>
+        </div>
+        <div class="choice-card" id="choice-b-card" onclick="selectChoice('b')">
+          <div class="choice-card-label">Option B</div>
+          <div class="choice-card-title" id="choice-b-title">&mdash;</div>
+          <div class="choice-card-rationale" id="choice-b-rationale">&mdash;</div>
+        </div>
+      </div>
+      <div class="modal-label" style="margin-top:8px;">Optional note</div>
+      <textarea id="resolve-note" placeholder="Add context for this decision&hellip;"></textarea>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-primary" onclick="submitResolve()">Resolve</button>
+      <button class="btn btn-primary" onclick="submitResolve()">Confirm Choice</button>
       <button class="btn" onclick="closeModal()">Cancel</button>
     </div>
   </div>
@@ -1396,6 +1500,9 @@
     var _recentDecisions = [];
     var _paletteIndex = -1;
     var _resolveTarget = null;
+    var _resolveWinnerId = null;
+    var _resolveWinnerTitle = null;
+    var _resolveLoserId = null;
     var _contradictionsMap = {};
 
     // ─── HELPERS ───────────────────────────────────────────────────────────────
@@ -1467,12 +1574,20 @@
       var total = s.total_decisions != null ? s.total_decisions : (s.total != null ? s.total : decArr.length);
       var pending = s.pending_decisions != null ? s.pending_decisions : (s.pending != null ? s.pending : 0);
       var contradictions = s.contradictions != null ? s.contradictions : (s.contradiction_count != null ? s.contradiction_count : 0);
-      var timeSaved = s.time_saved_hours != null ? s.time_saved_hours : (s.time_saved != null ? s.time_saved : null);
-
       document.getElementById('stat-decisions').textContent = total != null ? total : '\u2014';
-      document.getElementById('stat-decisions-meta').textContent = s.decisions_this_week != null
-        ? '+' + s.decisions_this_week + ' this week'
-        : 'all time';
+      var decMetaEl = document.getElementById('stat-decisions-meta');
+      if (s.decisions_trend != null) {
+        var trend = s.decisions_trend;
+        var sign = trend > 0 ? '+' : '';
+        decMetaEl.textContent = sign + trend + ' this week';
+        decMetaEl.style.color = trend > 0 ? 'var(--green)' : trend < 0 ? 'var(--red)' : 'var(--text-dim)';
+      } else if (s.decisions_this_week != null) {
+        decMetaEl.textContent = '+' + s.decisions_this_week + ' this week';
+        decMetaEl.style.color = '';
+      } else {
+        decMetaEl.textContent = 'all time';
+        decMetaEl.style.color = '';
+      }
 
       document.getElementById('stat-pending').textContent = pending != null ? pending : '\u2014';
       document.getElementById('stat-pending-meta').textContent = pending > 0
@@ -1491,11 +1606,44 @@
         contCard.classList.remove('stat-card-warn');
       }
 
-      var tsSaved = timeSaved != null
-        ? (typeof timeSaved === 'number' ? timeSaved.toFixed(1) + 'h' : timeSaved)
-        : '\u2014';
-      document.getElementById('stat-time-saved').textContent = tsSaved;
-      document.getElementById('stat-time-saved-meta').textContent = s.time_saved_meta || 'context lookups avoided';
+      var oversightPct = s.human_oversight_pct;
+      var oversightEl = document.getElementById('stat-oversight');
+      var oversightMetaEl = document.getElementById('stat-oversight-meta');
+      var oversightCard = document.getElementById('card-oversight');
+      if (oversightEl) {
+        if (oversightPct == null) {
+          oversightEl.textContent = 'N/A';
+          if (oversightMetaEl) oversightMetaEl.textContent = 'no conflicts yet';
+        } else {
+          oversightEl.textContent = oversightPct + '%';
+          if (oversightMetaEl) oversightMetaEl.textContent = 'of conflicts reviewed';
+          if (oversightCard) {
+            oversightCard.classList.remove('stat-card-warn', 'stat-card-ok', 'stat-card-danger');
+            if (oversightPct >= 80) {
+              oversightCard.classList.add('stat-card-ok');
+            } else if (oversightPct >= 50) {
+              oversightCard.classList.add('stat-card-warn');
+            } else {
+              oversightCard.classList.add('stat-card-danger');
+            }
+          }
+        }
+      }
+    }
+
+    // ─── RENDER HOTSPOTS ───────────────────────────────────────────────────────
+    function renderHotspots(hotspots) {
+      var banner = document.getElementById('hotspot-banner');
+      if (!banner) return;
+      if (!hotspots || hotspots.length === 0) { banner.style.display = 'none'; return; }
+      banner.style.display = 'flex';
+      banner.innerHTML = hotspots.map(function(h) {
+        return '<div class="hotspot-item">'
+          + '<span class="hotspot-icon">&#x1F525;</span>'
+          + 'Architecture Hotspot: <strong>&ldquo;' + esc(h.keyword) + '&rdquo;</strong>'
+          + '\u00a0\u2014\u00a0' + h.count + ' unresolved contradictions'
+          + '</div>';
+      }).join('');
     }
 
     // ─── RENDER FEED ───────────────────────────────────────────────────────────
@@ -1552,7 +1700,7 @@
           '  <div class="card-footer">',
           actionBtns,
           cl ? '    <span class="conf-pill ' + cc + '">' + esc(decisionType) + ' ' + cl + '</span>' : '',
-          hasConstraint ? '    <span class="constraint-badge">\u2691 constraint</span>' : '',
+          hasConstraint ? '    <span class="constraint-badge">constraint</span>' : '',
           '  </div>',
           '</div>',
         ].join('\n');
@@ -1570,7 +1718,10 @@
         if (id) _contradictionsMap[id] = c;
       });
 
-      countEl.textContent = contradictions.length;
+      // Only show unresolved contradictions in this panel
+      var unresolved = contradictions.filter(function(c) { return !c.resolved; });
+      countEl.textContent = unresolved.length;
+      contradictions = unresolved;
 
       if (!contradictions || contradictions.length === 0) {
         container.innerHTML = '<div class="empty-panel">No contradictions detected</div>';
@@ -1582,15 +1733,16 @@
         var safeId = String(id).replace(/'/g, "\\'");
         var title = esc(c.title || c.name || 'Contradiction');
         var safeTitle = (c.title || c.name || 'Contradiction').replace(/'/g, "\\'");
-        var desc = esc(truncate(c.explanation || c.description || c.details || '', 120));
+        var desc = esc(c.explanation || c.reason || c.description || c.details || '');
 
         return [
           '<div class="contradiction-item">',
           '  <div class="contra-title">' + title + '</div>',
           desc ? '  <div class="contra-desc">' + desc + '</div>' : '',
           '  <div class="contra-actions">',
-          '    <button class="btn-sm-outline" onclick="openResolveModal(\'' + safeId + '\', \'' + safeTitle + '\')">Resolve</button>',
+          '    <button class="btn-sm-outline" onclick="openResolveModal(\'' + safeId + '\')">Resolve</button>',
           '    <button class="btn-sm-ghost" onclick="viewContradictionDiff(\'' + safeId + '\')">View diff</button>',
+          '    <button class="btn-sm-ghost" onclick="ignoreContradiction(\'' + safeId + '\')" title="Not a real conflict — ignore this" style="color:var(--text-dim);margin-left:auto">Dismiss</button>',
           '  </div>',
           '</div>',
         ].join('\n');
@@ -1640,17 +1792,15 @@
     function updateNavBadges(stats) {
       var s = stats || {};
       var total = s.total_decisions != null ? s.total_decisions : s.total;
-      var pending = s.pending_decisions != null ? s.pending_decisions : s.pending;
-      var injections = s.injection_count != null ? s.injection_count : s.total_injections;
+      var boardCount = s.contradictions != null ? s.contradictions : (s.pending_decisions != null ? s.pending_decisions : s.pending);
 
       if (total != null) document.getElementById('nav-badge-decisions').textContent = total;
-      if (pending != null) document.getElementById('nav-badge-pending').textContent = pending;
-      if (injections != null) document.getElementById('nav-badge-injections').textContent = injections;
+      if (boardCount != null) document.getElementById('nav-badge-pending').textContent = boardCount;
     }
 
     // ─── UPDATE BREADCRUMB ─────────────────────────────────────────────────────
     function updateBreadcrumb(stats) {
-      var repo = (stats && stats.repo) ? stats.repo : 'smm-sync';
+      var repo = (stats && (stats.repo_name || stats.repo)) || 'smm-sync';
       document.getElementById('repo-name').textContent = repo;
       document.getElementById('breadcrumb').innerHTML = esc(repo) + ' <span>/</span> overview';
     }
@@ -1701,6 +1851,7 @@
       var agents = (results[4].value) || { agents: [] };
 
       renderHealthRow(stats, decisions);
+      renderHotspots(stats.hotspots || []);
       renderFeed(decisions.decisions || []);
       renderContradictions(contradictions.contradictions || []);
       renderComplianceLog(compliance.entries || []);
@@ -1882,31 +2033,93 @@
     }
 
     // ─── RESOLVE MODAL ─────────────────────────────────────────────────────────
-    function openResolveModal(id, title) {
+    function openResolveModal(id) {
+      var c = _contradictionsMap[id];
+      if (!c) return;
       _resolveTarget = id;
-      document.getElementById('resolve-contradiction-title').textContent = title;
-      document.getElementById('resolve-notes').value = '';
+      _resolveWinnerId = null;
+      _resolveWinnerTitle = null;
+      _resolveLoserId = null;
+
+      document.getElementById('resolve-contradiction-title').textContent =
+        (c.decision_a || 'Decision A') + ' \u2194 ' + (c.decision_b || 'Decision B');
+
+      var cardA = document.getElementById('choice-a-card');
+      var cardB = document.getElementById('choice-b-card');
+      document.getElementById('choice-a-title').textContent = c.decision_a || 'Decision A';
+      document.getElementById('choice-a-rationale').textContent = c.decision_a_rationale || '(no rationale available)';
+      cardA.dataset.decisionId = c.decision_a_id || '';
+      cardA.dataset.decisionTitle = c.decision_a || '';
+      cardA.className = 'choice-card';
+
+      document.getElementById('choice-b-title').textContent = c.decision_b || 'Decision B';
+      document.getElementById('choice-b-rationale').textContent = c.decision_b_rationale || '(no rationale available)';
+      cardB.dataset.decisionId = c.decision_b_id || '';
+      cardB.dataset.decisionTitle = c.decision_b || '';
+      cardB.className = 'choice-card';
+
+      document.getElementById('resolve-note').value = '';
       document.getElementById('resolve-modal-backdrop').classList.add('open');
       document.getElementById('resolve-modal').classList.add('open');
+    }
+
+    function selectChoice(which) {
+      var cardA = document.getElementById('choice-a-card');
+      var cardB = document.getElementById('choice-b-card');
+      if (which === 'a') {
+        _resolveWinnerId = cardA.dataset.decisionId;
+        _resolveWinnerTitle = cardA.dataset.decisionTitle;
+        _resolveLoserId = cardB.dataset.decisionId;
+        cardA.className = 'choice-card selected';
+        cardB.className = 'choice-card dimmed';
+      } else {
+        _resolveWinnerId = cardB.dataset.decisionId;
+        _resolveWinnerTitle = cardB.dataset.decisionTitle;
+        _resolveLoserId = cardA.dataset.decisionId;
+        cardB.className = 'choice-card selected';
+        cardA.className = 'choice-card dimmed';
+      }
     }
 
     function closeModal() {
       document.getElementById('resolve-modal-backdrop').classList.remove('open');
       document.getElementById('resolve-modal').classList.remove('open');
       _resolveTarget = null;
+      _resolveWinnerId = null;
+      _resolveWinnerTitle = null;
+      _resolveLoserId = null;
+    }
+
+    async function ignoreContradiction(id) {
+      var c = _contradictionsMap[id];
+      if (!c) return;
+      var label = (c.title || id).slice(0, 60);
+      if (!confirm('Ignore this contradiction?\n"' + label + '"\n\nIt won\'t be shown again.')) return;
+      try {
+        var r = await fetch('/api/contradictions/' + id + '/ignore', { method: 'POST' });
+        if (!r.ok) throw new Error('Ignore failed');
+        showToast('Dismissed', 'success');
+        init();
+      } catch(e) {
+        showToast('Error: ' + e.message, 'error');
+      }
     }
 
     async function submitResolve() {
       if (!_resolveTarget) return;
-      var notes = document.getElementById('resolve-notes').value.trim();
+      if (!_resolveWinnerId || !_resolveLoserId) {
+        showToast('Please choose which decision to keep', 'error');
+        return;
+      }
+      var note = document.getElementById('resolve-note').value.trim();
       try {
         var r = await fetch('/api/contradictions/' + _resolveTarget + '/resolve', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ notes: notes }),
+          body: JSON.stringify({ winner_id: _resolveWinnerId, loser_id: _resolveLoserId, note: note }),
         });
         if (!r.ok) throw new Error('Resolve failed');
-        showToast('Contradiction resolved', 'success');
+        showToast('\u2713 Kept: ' + _resolveWinnerTitle, 'success');
         closeModal();
         init();
       } catch(e) {
