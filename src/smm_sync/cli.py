@@ -1194,7 +1194,7 @@ def check_cmd(check_all: bool, project: str) -> None:
                     lambda: _sp.run(
                         ["claude", "-p", prompt],
                         capture_output=True, text=True,
-                        timeout=60, env=_safe_env,
+                        timeout=600, env=_safe_env,
                     ),
                 )
                 if _result.returncode == 0:
@@ -3024,7 +3024,7 @@ def discover_edges_cmd(project: str, use_local: bool) -> None:
                 ["claude", "-p", prompt],
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=600,
             )
             output = proc.stdout.strip()
         except FileNotFoundError:
