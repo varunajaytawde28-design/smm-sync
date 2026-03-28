@@ -1,4 +1,4 @@
-"""Axiom Lore-Hook: hook script templates and installation utilities.
+"""SMM Lore-Hook: hook script templates and installation utilities.
 
 Installs two git hooks + optional Claude Code/Cursor agent hooks that
 automatically capture architectural decisions at commit time.
@@ -11,7 +11,7 @@ Flow:
       → graph ingestion in background via smm add-decision
 
 Claude Code PreToolUse hook fires BEFORE git commit runs — same script,
-but writes trailers to .git/AXIOM_TRAILERS for prepare-commit-msg to inject.
+but writes trailers to .git/SMM_TRAILERS for prepare-commit-msg to inject.
 """
 from __future__ import annotations
 
@@ -30,11 +30,11 @@ from pathlib import Path
 #   - claude -p with --model haiku (fast, cheap, <2s for "no decision" path)
 #   - Never exits non-zero — commits always proceed
 #   - prepare-commit-msg mode ($1 = msg file): injects trailers directly
-#   - Standalone mode (Claude Code PreToolUse): writes .git/AXIOM_TRAILERS
+#   - Standalone mode (Claude Code PreToolUse): writes .git/SMM_TRAILERS
 # ---------------------------------------------------------------------------
 
 CAPTURE_SCRIPT = r"""#!/usr/bin/env bash
-# ─── Axiom Lore-Hook: pre-commit-capture.sh ────────────────────────────────
+# ─── SMM Lore-Hook: pre-commit-capture.sh ────────────────────────────────
 # Classifies git diffs for architectural decisions, injects Git trailers,
 # and ingests into the Axiom knowledge graph.
 #
@@ -49,12 +49,12 @@ CAPTURE_SCRIPT = r"""#!/usr/bin/env bash
 #   - smm not found
 # ────────────────────────────────────────────────────────────────────────────
 
-AXIOM_DIR="$HOME/.axiom"
-LOG_FILE="$AXIOM_DIR/lore-hook.log"
+SMM_HOOK_DIR="$HOME/.smm"
+LOG_FILE="$SMM_HOOK_DIR/lore-hook.log"
 MAX_DIFF_CHARS=3500
 
 # Create log dir
-mkdir -p "$AXIOM_DIR"
+mkdir -p "$SMM_HOOK_DIR"
 
 log() { echo "[$(date -u '+%H:%M:%S')] $*" >> "$LOG_FILE" 2>/dev/null || true; }
 
@@ -69,7 +69,7 @@ log "lore-hook triggered (mode=${COMMIT_MSG_FILE:+prepare-commit-msg}${COMMIT_MS
 
 # ── Guard: ANTHROPIC_API_KEY ──────────────────────────────────────────────
 if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-    [ -f "$AXIOM_DIR/config" ] && . "$AXIOM_DIR/config" 2>/dev/null || true
+    [ -f "$SMM_HOOK_DIR/config" ] && . "$SMM_HOOK_DIR/config" 2>/dev/null || true
 fi
 if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
     log "ANTHROPIC_API_KEY not set — skipping"
@@ -241,7 +241,7 @@ if [ -n "$COMMIT_MSG_FILE" ]; then
 else
     # Standalone/PreToolUse mode: write for prepare-commit-msg to pick up
     GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || GIT_DIR=".git"
-    TRAILERS_PENDING="$GIT_DIR/AXIOM_TRAILERS"
+    TRAILERS_PENDING="$GIT_DIR/SMM_TRAILERS"
     write_trailers "$TRAILERS_PENDING"
     log "trailers staged at $TRAILERS_PENDING"
 fi
@@ -300,15 +300,15 @@ exit 0
 
 
 # ---------------------------------------------------------------------------
-# prepare-commit-msg hook: picks up .git/AXIOM_TRAILERS from PreToolUse run
+# prepare-commit-msg hook: picks up .git/SMM_TRAILERS from PreToolUse run
 # ---------------------------------------------------------------------------
 PREPARE_COMMIT_MSG_HOOK = """\
 #!/bin/sh
-# Axiom Lore-Hook: inject pre-staged trailers into commit message.
+# SMM Lore-Hook: inject pre-staged trailers into commit message.
 # Trailers are written by pre-commit-capture.sh when run in standalone mode
 # (e.g., Claude Code PreToolUse hook fires before git commit).
 GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || GIT_DIR=".git"
-TRAILERS_FILE="$GIT_DIR/AXIOM_TRAILERS"
+TRAILERS_FILE="$GIT_DIR/SMM_TRAILERS"
 if [ -f "$TRAILERS_FILE" ]; then
     cat "$TRAILERS_FILE" >> "$1"
     rm -f "$TRAILERS_FILE"
@@ -353,13 +353,13 @@ def install_git_hooks(git_root: Path) -> bool:
     if not git_hooks.exists():
         return False
 
-    capture_script = Path.home() / ".axiom" / "hooks" / "pre-commit-capture.sh"
+    capture_script = Path.home() / ".smm" / "hooks" / "pre-commit-capture.sh"
 
     # prepare-commit-msg: runs capture script + picks up pre-staged trailers
     pcm_hook = git_hooks / "prepare-commit-msg"
     pcm_content = f"""\
 #!/bin/sh
-# smm-sync Axiom Lore-Hook
+# smm-sync SMM Lore-Hook
 # Classifies diff for architectural decisions, injects trailers, ingests to graph.
 if [ -x "{capture_script}" ]; then
     "{capture_script}" "$1" "$2" "$3"
@@ -368,7 +368,7 @@ fi
 """
     if pcm_hook.exists():
         existing = pcm_hook.read_text(encoding="utf-8")
-        if "Axiom Lore-Hook" not in existing:
+        if "SMM Lore-Hook" not in existing:
             pcm_hook.write_text(existing.rstrip() + "\n\n" + pcm_content, encoding="utf-8")
     else:
         pcm_hook.write_text(pcm_content, encoding="utf-8")
@@ -416,7 +416,7 @@ def configure_claude_code_hook() -> bool:
         True if settings were updated or already correct, False on error.
     """
     settings_path = Path.home() / ".claude" / "settings.json"
-    capture_script = str(Path.home() / ".axiom" / "hooks" / "pre-commit-capture.sh")
+    capture_script = str(Path.home() / ".smm" / "hooks" / "pre-commit-capture.sh")
 
     # Read existing settings
     if settings_path.exists():
@@ -468,7 +468,7 @@ def configure_cursor_hook(project_root: Path) -> bool:
         True on success, False on error.
     """
     cursor_dir = project_root / ".cursor"
-    capture_script = str(Path.home() / ".axiom" / "hooks" / "pre-commit-capture.sh")
+    capture_script = str(Path.home() / ".smm" / "hooks" / "pre-commit-capture.sh")
 
     hooks_config = {
         "version": 1,

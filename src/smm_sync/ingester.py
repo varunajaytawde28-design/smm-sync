@@ -20,14 +20,14 @@ _KNOWN_SECTIONS = {
 _PARSED_CONTEXT_FILE = "parsed_context.json"
 
 
-def _md5(text: str) -> str:
-    """Return MD5 hex digest of text.
+def _content_hash(text: str) -> str:
+    """Return SHA-256 hex digest of text.
 
     Args:
         text: Input string.
 
     Returns:
-        64-character hex string (SHA256 hash).
+        64-character hex string (SHA-256 hash).
     """
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -73,7 +73,7 @@ def parse_agents_md(content: str) -> dict[str, Any]:
         "constraints": sections.get("constraints", ""),
         "danger_zones": sections.get("danger zones", ""),
         "conventions": sections.get("conventions", ""),
-        "content_hash": _md5(content),
+        "content_hash": _content_hash(content),
     }
 
 

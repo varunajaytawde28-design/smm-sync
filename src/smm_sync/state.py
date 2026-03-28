@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -104,6 +105,8 @@ def _append_event(smm_dir: Path, event: dict) -> None:
     path = _events_path(smm_dir)
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(event) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +124,7 @@ def materialize_state(events: list[dict]) -> dict:
             claimed_files (dict): filepath -> {"session_id": str, "since": str, "task": str}
             active_sessions (dict): session_id -> {"started": str, "files": list[str]}
             last_refresh (str): ISO8601 of last context_refreshed event, or "".
-            context_hash (str): MD5 hash of AGENTS.md at last refresh, or "".
+            context_hash (str): SHA-256 hash of AGENTS.md at last refresh, or "".
     """
     claimed_files: dict[str, dict] = {}
     active_sessions: dict[str, dict] = {}
@@ -185,9 +188,18 @@ def _save_state(smm_dir: Path, state: dict) -> None:
         smm_dir: Path to .smm directory.
         state: Materialised state dict.
     """
-    _state_path(smm_dir).write_text(
-        json.dumps(state, indent=2, default=str), encoding="utf-8"
-    )
+    data = json.dumps(state, indent=2, default=str)
+    target = _state_path(smm_dir)
+    fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, str(target))
+    except BaseException:
+        os.unlink(tmp)
+        raise
 
 
 # ---------------------------------------------------------------------------

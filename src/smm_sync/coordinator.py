@@ -1,4 +1,9 @@
-"""Tuple Space coordinator using os.rename() POSIX atomicity for file claiming.
+"""Tuple Space coordinator using os.link() for atomic file claiming.
+
+os.link() is used instead of os.rename() because link() fails with EEXIST
+when the destination already exists, preventing silent overwrite. os.rename()
+on POSIX replaces the destination atomically, which would silently steal an
+existing lock.
 """
 from __future__ import annotations
 
@@ -36,11 +41,13 @@ def _lock_file_path(smm_dir: Path, filepath: str) -> Path:
 
 
 def claim(smm_dir: Path, filepath: str, session_id: str = "") -> bool:
-    """Atomically claim a file using os.rename() POSIX atomicity.
+    """Atomically claim a file using os.link() POSIX semantics.
 
-    Uses a write-to-tmp then rename pattern. os.rename() on POSIX
-    is atomic within the same filesystem — either the rename succeeds
-    and we own the lock, or the lock already exists and we fail.
+    Uses a write-to-tmp then os.link() pattern. os.link() fails with
+    EEXIST if the destination already exists — either we own the lock,
+    or another session does and we return False. Unlike os.rename(),
+    which replaces the destination atomically on POSIX, os.link() never
+    silently overwrites an existing lock file.
 
     Args:
         smm_dir: Path to .smm directory.
@@ -58,11 +65,11 @@ def claim(smm_dir: Path, filepath: str, session_id: str = "") -> bool:
 
     try:
         os.link(tmp_path, lock_path)  # fails with EEXIST if lock_path exists
-        os.unlink(tmp_path)
         return True
     except OSError:
-        tmp_path.unlink(missing_ok=True)
         return False
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def release(smm_dir: Path, filepath: str) -> None:
