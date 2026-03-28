@@ -845,7 +845,7 @@ def add_decision_cmd(
                     input=_json.dumps(data),
                     capture_output=True,
                     text=True,
-                    timeout=10,
+                    timeout=1,
                 )
                 if result.returncode == 0:
                     click.echo(result.stdout.strip())
