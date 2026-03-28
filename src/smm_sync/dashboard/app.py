@@ -107,21 +107,14 @@ async def _startup_contradiction_check() -> None:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Eagerly initialise the graph client and embedding model at startup.
+    """Start up the dashboard without blocking on heavy operations.
 
-    Without this, the first request to any graph-backed endpoint pays the
-    2-3 second sentence-transformer model load + Kuzu connection open cost.
-    Also runs smm check if there are unchecked decisions, so contradictions
-    are visible in the dashboard immediately.
+    The dashboard reads exclusively from JSONL files and serves the web UI.
+    No model loading or graph sync at startup — these only happen via ``smm check``.
     """
-    try:
-        client = _get_graph_client()
-        if client is not None:
-            await client._get_graphiti()
-    except Exception as exc:
-        print(f"[dashboard] startup preload warning: {exc}", file=sys.stderr)
-
-    await _startup_contradiction_check()
+    # Start non-blocking background check if there are unchecked decisions.
+    # Fire-and-forget: dashboard is immediately available regardless of outcome.
+    asyncio.create_task(_startup_contradiction_check())
 
     yield
 

@@ -1940,11 +1940,10 @@ def generate(target_dir: Path) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python scripts/generate_demo_data.py <target_dir>")
-        print("Example: python scripts/generate_demo_data.py /tmp/dunder-mifflin")
-        sys.exit(1)
-
-    target = Path(sys.argv[1]).expanduser().resolve()
+    if len(sys.argv) >= 2:
+        target = Path(sys.argv[1]).expanduser().resolve()
+    else:
+        # Default to current working directory (generates into ./. smm/)
+        target = Path.cwd()
     target.mkdir(parents=True, exist_ok=True)
     generate(target)

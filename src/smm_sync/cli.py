@@ -487,263 +487,166 @@ def list_decisions(project: str) -> None:
 def get_context_cmd(project: str) -> None:
     """Output a clean summary of project decisions, contradictions, and PM resolutions.
 
-    Readable by AI agents and humans. Shows active contradictions,
-    recent decisions, and ACTION REQUIRED items from PM resolutions.
+    Reads directly from JSONL files — no model loading, no graph sync.
+    Readable by AI agents and humans.
 
     Example:
         smm get-context
         smm get-context --project mf-tracker
     """
-    import asyncio
     import json as _json
     from datetime import datetime, timezone, timedelta
-
-    try:
-        from smm_sync.context_graph.client import GraphClient
-    except ImportError as exc:
-        click.echo(click.style(f"context_graph unavailable: {exc}", fg="red"), err=True)
-        sys.exit(1)
 
     smm_dir = get_smm_dir()
     if not smm_dir.exists():
         click.echo(click.style("No .smm/ directory found. Run `smm init` first.", fg="red"))
         sys.exit(1)
 
-    # ── Auto-run smm check if there are unchecked decisions ──────────────────
-    _decisions_path = smm_dir / "decisions.jsonl"
-    _last_check_path = smm_dir / "last_check_timestamp.txt"
-    if _decisions_path.exists():
-        _last_check_ts = None
-        if _last_check_path.exists():
-            try:
-                _ts_str = _last_check_path.read_text(encoding="utf-8").strip()
-                _last_check_ts = datetime.fromisoformat(_ts_str)
-            except Exception:
-                pass
-        _has_new = False
-        if _last_check_ts is None:
-            _has_new = _decisions_path.stat().st_size > 0
-        else:
-            try:
-                for _line in _decisions_path.read_text(encoding="utf-8").splitlines():
-                    _line = _line.strip()
-                    if not _line:
-                        continue
-                    try:
-                        _d = _json.loads(_line)
-                        _ts = datetime.fromisoformat(_d.get("timestamp", "").replace("Z", "+00:00"))
-                        if _ts > _last_check_ts:
-                            _has_new = True
-                            break
-                    except Exception:
-                        _has_new = True
-                        break
-            except Exception:
-                pass
-        if _has_new:
-            click.echo(click.style("Running smm check for unchecked decisions...", fg="cyan"), err=True)
-            import subprocess as _sp
-            try:
-                _res = _sp.run(["smm", "check"], capture_output=True, text=True, timeout=120)
-                if _res.stdout:
-                    click.echo(_res.stdout.rstrip(), err=True)
-            except Exception as _exc:
-                click.echo(click.style(f"  smm check skipped: {_exc}", fg="yellow"), err=True)
-
-    # ── Enforcement: check for architectural violations before returning context ─
-    from smm_sync.mcp_server import _run_verification, _build_block_message
-    violations = _run_verification(smm_dir)
-    if violations:
-        click.echo(
-            click.style(
-                f"⛔ BLOCKED: {len(violations)} architectural violation"
-                f"{'s' if len(violations) != 1 else ''} found",
-                fg="red",
-                bold=True,
-            )
-        )
-        click.echo("")
-        for i, v in enumerate(violations, 1):
-            click.echo(f"  {i}. {v}")
-        click.echo("")
-        block_msg = _build_block_message(violations)
-        if "COMMANDS TO FIX:" in block_msg:
-            fix_section = block_msg.split("COMMANDS TO FIX:", 1)[1].split("\n\nAfter fixing")[0]
-            click.echo("COMMANDS TO FIX:")
-            click.echo(fix_section.strip())
-            click.echo("")
-        click.echo("After fixing, run `smm get-context` again.")
-        sys.exit(1)
-
-    graph_dir = smm_dir / "graph"
-    client = GraphClient(graph_dir=graph_dir)
-
-    async def _run():
-        # ── 1. Load decisions from Kuzu ──────────────────────────────────────
-        try:
-            decisions = await client.get_decisions(project=project)
-        except Exception as exc:
-            click.echo(click.style(f"Failed to load decisions: {exc}", fg="red"), err=True)
-            decisions = []
-
-        # Count by type
-        type_counts: dict[str, int] = {}
-        for d in decisions:
-            content = d.content or ""
-            dt = "architectural"
-            if "Decision type: technical" in content or "technical" in content.lower():
-                dt = "technical"
-            elif "Decision type: product" in content or "product" in content.lower():
-                dt = "product"
-            type_counts[dt] = type_counts.get(dt, 0) + 1
-
-        # ── 2. Recent decisions (last 7 days) ────────────────────────────────
-        cutoff_7d = datetime.now(timezone.utc) - timedelta(days=7)
-        recent: list[dict] = []
-        for d in decisions:
-            created = d.created_at
-            if hasattr(created, "replace"):
-                # Kuzu returns naive datetime — make it UTC-aware
+    # ── 1. Read decisions from JSONL ──────────────────────────────────────────
+    decisions_path = smm_dir / "decisions.jsonl"
+    decisions_data: list[dict] = []
+    if decisions_path.exists():
+        for _line in decisions_path.read_text(encoding="utf-8").splitlines():
+            _line = _line.strip()
+            if _line:
                 try:
-                    created = created.replace(tzinfo=timezone.utc)
+                    decisions_data.append(_json.loads(_line))
                 except Exception:
                     pass
-            if hasattr(created, "timestamp") and created >= cutoff_7d:
-                conf = 0.80
-                dt = "technical"
-                for line in (d.content or "").splitlines():
-                    if line.startswith("Confidence:"):
-                        try:
-                            conf = float(line.split(":", 1)[1].strip())
-                        except Exception:
-                            pass
-                    if line.startswith("Decision type:"):
-                        dt = line.split(":", 1)[1].strip()
-                recent.append({"title": d.title or "", "type": dt, "confidence": conf})
 
-        # ── 3. Load contradictions ────────────────────────────────────────────
-        contra_path = smm_dir / "contradictions.jsonl"
-        all_contras: list[dict] = []
-        if contra_path.exists():
-            for line in contra_path.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if line:
-                    try:
-                        all_contras.append(_json.loads(line))
-                    except Exception:
-                        pass
+    # Count by type
+    type_counts: dict[str, int] = {}
+    for d in decisions_data:
+        dt = (d.get("type") or "technical").lower()
+        type_counts[dt] = type_counts.get(dt, 0) + 1
 
-        active_contras = [c for c in all_contras if not c.get("resolved", False)]
-
-        # ── 4. Load contradiction_index.json (resolved pairs) ────────────────
-        idx_path = smm_dir / "contradiction_index.json"
-        idx: dict = {"pairs": []}
-        if idx_path.exists():
-            try:
-                idx = _json.loads(idx_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-
-        cutoff_30d = datetime.now(timezone.utc) - timedelta(days=30)
-        resolved_pairs = []
-        action_required = []
-
-        for pair in idx.get("pairs", []):
-            if pair.get("status") != "resolved":
-                continue
-            actioned_str = pair.get("actioned_at", "")
-            if not actioned_str:
-                continue
-            try:
-                actioned_dt = datetime.fromisoformat(actioned_str.replace("Z", "+00:00"))
-            except Exception:
-                continue
-            if actioned_dt < cutoff_30d:
-                continue
-
-            winner = pair.get("decision_a_title", "")
-            loser = pair.get("decision_b_title", "")
-            note = pair.get("note", "")
-            actor = pair.get("actioned_by", "dashboard")
-            date_str = actioned_str[:10]
-
-            # Check if implemented
-            already_done = False
-            try:
-                impl_rows, _, _ = await client._driver.execute_query(
-                    "MATCH (e:Episodic) WHERE e.name STARTS WITH 'Implemented PM resolution' "
-                    "RETURN e.name LIMIT 50"
-                )
-                for r in impl_rows:
-                    name = r.get("e.name", "") or ""
-                    if winner and winner[:30].lower() in name.lower():
-                        already_done = True
-                        break
-            except Exception:
-                pass
-
-            resolved_pairs.append({
-                "winner": winner, "loser": loser, "note": note,
-                "actor": actor, "date": date_str, "already_done": already_done,
-            })
-            if not already_done:
-                action_required.append({
-                    "winner": winner, "loser": loser, "note": note, "date": date_str,
+    # ── 2. Recent decisions (last 7 days) ────────────────────────────────────
+    cutoff_7d = datetime.now(timezone.utc) - timedelta(days=7)
+    recent: list[dict] = []
+    for d in decisions_data:
+        ts_str = d.get("timestamp", "")
+        try:
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            if ts >= cutoff_7d:
+                recent.append({
+                    "title": d.get("title", ""),
+                    "type": (d.get("type") or "technical").lower(),
+                    "confidence": float(d.get("confidence") or 0.80),
                 })
+        except Exception:
+            pass
 
-        # ── 5. Format output ──────────────────────────────────────────────────
-        total = len(decisions)
-        type_summary = ", ".join(
-            f"{v} {k}" for k, v in sorted(type_counts.items())
-        )
+    # ── 3. Load contradictions from JSONL ─────────────────────────────────────
+    contra_path = smm_dir / "contradictions.jsonl"
+    all_contras: list[dict] = []
+    if contra_path.exists():
+        for _line in contra_path.read_text(encoding="utf-8").splitlines():
+            _line = _line.strip()
+            if _line:
+                try:
+                    all_contras.append(_json.loads(_line))
+                except Exception:
+                    pass
 
-        click.echo("---")
-        click.echo(f"Project: {project}")
-        click.echo(f"Decisions: {total} total ({type_summary})")
+    # Unresolved = not resolved, not dismissed, not ignored
+    active_contras = [
+        c for c in all_contras
+        if c.get("status") not in ("resolved", "dismissed", "ignored")
+        and not c.get("resolved", False)
+    ]
+
+    # ── 4. Load contradiction_index.json (resolved pairs) ────────────────────
+    idx_path = smm_dir / "contradiction_index.json"
+    resolved_pairs: list[dict] = []
+    action_required: list[dict] = []
+
+    if idx_path.exists():
+        try:
+            idx = _json.loads(idx_path.read_text(encoding="utf-8"))
+            cutoff_30d = datetime.now(timezone.utc) - timedelta(days=30)
+            cutoff_7d_ar = datetime.now(timezone.utc) - timedelta(days=7)
+            for pair in idx.get("pairs", []):
+                if pair.get("status") != "resolved":
+                    continue
+                actioned_str = pair.get("actioned_at", "")
+                if not actioned_str:
+                    continue
+                try:
+                    actioned_dt = datetime.fromisoformat(actioned_str.replace("Z", "+00:00"))
+                except Exception:
+                    continue
+                if actioned_dt < cutoff_30d:
+                    continue
+                winner = pair.get("decision_a_title", "")
+                loser = pair.get("decision_b_title", "")
+                note = pair.get("note", "")
+                actor = pair.get("actioned_by", "dashboard")
+                date_str = actioned_str[:10]
+                resolved_pairs.append({
+                    "winner": winner, "loser": loser, "note": note,
+                    "actor": actor, "date": date_str,
+                })
+                if actioned_dt >= cutoff_7d_ar:
+                    action_required.append({
+                        "winner": winner, "loser": loser, "note": note, "date": date_str,
+                    })
+        except Exception:
+            pass
+
+    # ── 5. Format output ──────────────────────────────────────────────────────
+    total = len(decisions_data)
+    type_summary = ", ".join(
+        f"{v} {k}" for k, v in sorted(type_counts.items())
+    )
+
+    click.echo("---")
+    click.echo(f"Project: {project}")
+    click.echo(f"Decisions: {total} total ({type_summary})")
+    click.echo("")
+
+    if recent:
+        click.echo("Recent decisions (last 7 days):")
+        for i, d in enumerate(recent[:5], 1):
+            click.echo(f"  {i}. {d['title']} [{d['type']}, {d['confidence']:.2f}]")
         click.echo("")
 
-        if recent:
-            click.echo("Recent decisions (last 7 days):")
-            for i, d in enumerate(recent[:5], 1):
-                conf_pct = int(d["confidence"] * 100)
-                click.echo(f"  {i}. {d['title']} [{d['type']}, {d['confidence']:.2f}]")
-            click.echo("")
+    # Contradiction summary — always show (Design fix)
+    if active_contras:
+        click.echo(f"\u26a0 UNRESOLVED CONTRADICTIONS ({len(active_contras)}):")
+        for i, c in enumerate(active_contras, 1):
+            a = c.get("decision_a", "")
+            b = c.get("decision_b", "")
+            conf = c.get("confidence")
+            conf_str = f" \u2014 Confidence: {conf:.2f}" if conf is not None else ""
+            click.echo(f'  {i}. "{a}" CONTRADICTS "{b}"{conf_str}')
+        click.echo("")
+        click.echo("  ACTION REQUIRED: Resolve these contradictions on the dashboard (smm dashboard) before proceeding.")
+        click.echo("")
+    else:
+        click.echo("\u2705 No unresolved contradictions")
+        click.echo("")
 
-        if active_contras:
-            click.echo("Active contradictions (need resolution):")
-            for c in active_contras:
-                a = c.get("decision_a", "")
-                b = c.get("decision_b", "")
-                click.echo(f'  \u26a0 "{a}" \u2194 "{b}"')
-            click.echo("")
-
-        if resolved_pairs:
-            click.echo("Resolved contradictions (last 30 days):")
-            for rp in resolved_pairs:
-                if rp["already_done"]:
-                    status = "\u2713 IMPLEMENTED"
-                else:
-                    status = "\u2713 KEEP"
-                click.echo(
-                    f'  {status}: "{rp["winner"]}" \u2014 SUPERSEDED: "{rp["loser"]}"'
-                )
-                click.echo(f'    Resolved by: {rp["actor"]} on {rp["date"]}')
-                if rp["note"]:
-                    click.echo(f'    Note: {rp["note"]}')
-            click.echo("")
-
-        if action_required:
-            click.echo("ACTION REQUIRED \u2014 Implement these PM resolutions:")
-            for i, ar in enumerate(action_required, 1):
-                click.echo(f"  {i}. Codebase must use {ar['winner']}, NOT {ar['loser']}")
+    if resolved_pairs:
+        click.echo("Resolved contradictions (last 30 days):")
+        for rp in resolved_pairs:
             click.echo(
-                "  Review and refactor any code that still follows superseded decisions."
+                f'  \u2713 KEEP: "{rp["winner"]}" \u2014 SUPERSEDED: "{rp["loser"]}"'
             )
-            click.echo("")
+            click.echo(f'    Resolved by: {rp["actor"]} on {rp["date"]}')
+            if rp["note"]:
+                click.echo(f'    Note: {rp["note"]}')
+        click.echo("")
 
-        click.echo("---")
+    if action_required:
+        click.echo("ACTION REQUIRED \u2014 Implement these PM resolutions:")
+        for i, ar in enumerate(action_required, 1):
+            click.echo(f"  {i}. Codebase must use {ar['winner']}, NOT {ar['loser']}")
+        click.echo(
+            "  Review and refactor any code that still follows superseded decisions."
+        )
+        click.echo("")
 
-    asyncio.run(_run())
+    click.echo("---")
 
 
 def _server_running_on_port(port: int) -> bool:
@@ -851,7 +754,7 @@ def _find_rust_binary() -> str | None:
 
 
 @main.command("add-decision")
-@click.argument("source", type=click.File("r"), default="-", metavar="[JSON_FILE|-]")
+@click.argument("source", type=click.File("r"), default="-", required=False, metavar="[JSON_FILE|-]")
 @click.option("--project", default="smm-sync", help="Project name.")
 @click.option(
     "--local",
@@ -866,8 +769,23 @@ def _find_rust_binary() -> str | None:
     default=None,
     help="Context note: PRD name, ticket ID, or source description (e.g. 'PRD-001: Legacy Migration').",
 )
-def add_decision_cmd(source: click.File, project: str, use_local: bool, ctx_note: str | None) -> None:
-    """Record a decision from JSON. Reads from stdin (-) or a file.
+@click.option("--title", "title_opt", default=None, help="Decision title (alternative to JSON input).")
+@click.option("--description", "description_opt", default=None, help="Decision description/rationale.")
+@click.option("--type", "type_opt", default=None, help="Decision type: architectural/technical/product/constraint.")
+@click.option("--confidence", "confidence_opt", type=float, default=None, help="Confidence score (0.0-1.0).")
+@click.option("--made-by", "made_by_opt", default=None, help="Who made this decision.")
+def add_decision_cmd(
+    source: click.File,
+    project: str,
+    use_local: bool,
+    ctx_note: str | None,
+    title_opt: str | None,
+    description_opt: str | None,
+    type_opt: str | None,
+    confidence_opt: float | None,
+    made_by_opt: str | None,
+) -> None:
+    """Record a decision from JSON or named flags. Reads from stdin (-) or a file.
 
     Hot path: tries the compiled Rust binary (smm-fast-write) first — ~10 ms.
     Falls back to a pure-Python JSONL append if Rust is unavailable — < 500 ms.
@@ -881,16 +799,32 @@ def add_decision_cmd(source: click.File, project: str, use_local: bool, ctx_note
     Example:
         echo '{"title":"Use Kuzu","rationale":"No Docker needed","type":"technical"}' \\
             | smm add-decision -
+        smm add-decision --title "Use Kuzu" --description "No Docker needed" --type technical
         smm add-decision --local decision.json   # --local flag kept for compat
     """
     import json as _json
     import subprocess as _subprocess
 
-    try:
-        data = _json.load(source)
-    except _json.JSONDecodeError as exc:
-        click.echo(click.style(f"Invalid JSON: {exc}", fg="red"), err=True)
-        sys.exit(1)
+    if title_opt:
+        # Build data dict from named flags — no stdin read needed.
+        if not description_opt:
+            click.echo(click.style("--description is required when using --title", fg="red"), err=True)
+            sys.exit(1)
+        data: dict = {
+            "title": title_opt,
+            "rationale": description_opt,
+            "type": type_opt or "technical",
+        }
+        if confidence_opt is not None:
+            data["confidence"] = confidence_opt
+        if made_by_opt:
+            data["made_by"] = made_by_opt
+    else:
+        try:
+            data = _json.load(source)
+        except _json.JSONDecodeError as exc:
+            click.echo(click.style(f"Invalid JSON: {exc}", fg="red"), err=True)
+            sys.exit(1)
 
     # Normalise: if caller passed "decision_type" map to "type" for Rust binary.
     if "decision_type" in data and "type" not in data:
@@ -940,6 +874,9 @@ def add_decision_cmd(source: click.File, project: str, use_local: bool, ctx_note
         write_decision(data, project=project)
         _title = data.get("title", "Unnamed decision")
         click.echo(click.style(f"\u2713 Decision: {_title} \u2014 recorded", fg="green"))
+    except ValueError as exc:
+        click.echo(click.style(f"Validation error: {exc}", fg="red"), err=True)
+        sys.exit(1)
     except Exception as exc:
         click.echo(click.style(f"Ingestion failed: {exc}", fg="red"), err=True)
         sys.exit(1)

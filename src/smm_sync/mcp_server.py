@@ -582,6 +582,7 @@ async def add_decision(
     constraints: list[str] = [],
     alternatives: list[str] = [],
     decision_type: str = "technical",
+    confidence: float | None = None,
 ) -> dict:
     """Record a new team decision in the knowledge graph.
 
@@ -606,6 +607,8 @@ async def add_decision(
     Returns:
         Dict with keys: success (bool), decision_id (str) or error (str).
     """
+    if confidence is not None and not (0.0 <= confidence <= 1.0):
+        return {"success": False, "error": f"Confidence must be between 0.0 and 1.0, got {confidence!r}"}
     client = _get_graph_client()
     if client is None:
         return {"success": False, "error": "Context graph unavailable."}
@@ -847,13 +850,20 @@ async def get_project_context(project: str = "smm-sync", session_id: str = "") -
             lines.append(f"{i}. {al}")
         lines.append("")
 
-    # Active contradictions section
+    # Active contradictions section — always show (Design fix)
     if active_contras:
-        lines.append("ACTIVE CONTRADICTIONS:")
-        for ac in active_contras:
+        lines.append(f"⚠ UNRESOLVED CONTRADICTIONS ({len(active_contras)}):")
+        for i, ac in enumerate(active_contras, 1):
             da = ac.get("decision_a", "")
             db = ac.get("decision_b", "")
-            lines.append(f"  ⚠ '{da}' ↔ '{db}' — needs PM decision")
+            conf = ac.get("confidence")
+            conf_str = f" — Confidence: {conf:.2f}" if conf is not None else ""
+            lines.append(f'  {i}. "{da}" CONTRADICTS "{db}"{conf_str}')
+        lines.append("")
+        lines.append("  ACTION REQUIRED: Resolve these contradictions on the dashboard (smm dashboard) before proceeding.")
+        lines.append("")
+    else:
+        lines.append("✅ No unresolved contradictions")
         lines.append("")
 
     # Resolved contradictions (last 30 days)

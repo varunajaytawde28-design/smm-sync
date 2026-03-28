@@ -174,6 +174,28 @@ def _value_to_str(v: object) -> str:
     return ""
 
 
+def _validated_confidence(raw: object) -> float:
+    """Parse and validate a confidence value.
+
+    Args:
+        raw: Raw confidence value from input (float, int, str, or None).
+
+    Returns:
+        Float in [0.0, 1.0].
+
+    Raises:
+        ValueError: If the value is outside [0.0, 1.0].
+    """
+    if raw is None:
+        return 0.80
+    val = float(raw)
+    if not (0.0 <= val <= 1.0):
+        raise ValueError(
+            f"Confidence must be between 0.0 and 1.0, got {raw!r}"
+        )
+    return val
+
+
 def append_jsonl_locked(path: Path, record: dict, retries: int = 3, retry_delay: float = 1.0) -> bool:
     """Append one JSON line to a JSONL file using an exclusive file lock.
 
@@ -279,7 +301,7 @@ def write_decision(data: dict, project: str = "smm-sync") -> str:
         "title": title,
         "rationale": rationale,
         "type": decision_type,
-        "confidence": (lambda c: c / 100.0 if c > 1.0 else c)(float(data.get("confidence") or 0.80)),
+        "confidence": _validated_confidence(data.get("confidence")),
         "alternatives": _value_to_str(data.get("alternatives", "")),
         "constraints": _value_to_str(data.get("constraints", "")),
         "timestamp": timestamp,
