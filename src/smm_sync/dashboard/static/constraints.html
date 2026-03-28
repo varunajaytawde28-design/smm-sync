@@ -212,6 +212,20 @@ function showToast(msg) {
   t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2800);
 }
 
+function safeStr(v) {
+  if (v == null) return '';
+  return typeof v === 'string' ? v : String(v);
+}
+
+function escHtml(v) {
+  return safeStr(v)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function confClass(c) {
   if (c >= 0.85) return 'conf-high';
   if (c >= 0.70) return 'conf-mid';
@@ -234,9 +248,9 @@ function renderConstraints() {
     return `<div class="constraint-item">
       <div class="con-icon-r">⚑</div>
       <div class="con-body">
-        <div class="con-title-r">${d.title}</div>
-        ${rationale ? `<div class="con-rationale">${rationale}${rationale.length >= 150 ? '...' : ''}</div>` : ''}
-        <div class="con-tags"><span class="tag tag-constraint">constraint</span><span class="tag tag-manual">${d.source_type || 'manual'}</span></div>
+        <div class="con-title-r">${escHtml(d.title)}</div>
+        ${rationale ? `<div class="con-rationale">${escHtml(rationale)}${rationale.length >= 150 ? '...' : ''}</div>` : ''}
+        <div class="con-tags"><span class="tag tag-constraint">constraint</span><span class="tag tag-manual">${escHtml(d.source_type || 'manual')}</span></div>
       </div>
       <span class="confidence-pill ${confClass(conf)}">${conf.toFixed ? conf.toFixed(2) : conf}</span>
     </div>`;

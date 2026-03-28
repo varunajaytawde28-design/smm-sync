@@ -155,6 +155,20 @@ function showToast(msg) {
   t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2800);
 }
 
+function safeStr(v) {
+  if (v == null) return '';
+  return typeof v === 'string' ? v : String(v);
+}
+
+function escHtml(v) {
+  return safeStr(v)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function postToSlack() {
   showToast('Slack integration coming soon — run "smm digest --slack" in terminal');
 }
@@ -170,7 +184,7 @@ async function loadDigest() {
     const timeStr = h > 0 ? `~${h}h ${m}m` : `~${m}m`;
 
     const contraWarning = (data.contradictions_this_period || 0) > 0
-      ? `<div class="alert-box"><strong>⚠ ${data.contradictions_this_period} architecture alert(s)</strong><br><small>${(data.contradiction_titles || []).join(' · ')}</small></div>`
+      ? `<div class="alert-box"><strong>⚠ ${data.contradictions_this_period} architecture alert(s)</strong><br><small>${(data.contradiction_titles || []).map(escHtml).join(' · ')}</small></div>`
       : '';
 
     const topDecisions = (data.top_decisions || []).length > 0
@@ -179,7 +193,7 @@ async function loadDigest() {
          ${(data.top_decisions || []).slice(0, 10).map((d, i) => `
            <div class="decision-list-item">
              <span class="dl-num">${i + 1}</span>
-             <span class="dl-title">${typeof d === 'string' ? d : (d.title || d)}</span>
+             <span class="dl-title">${escHtml(typeof d === 'string' ? d : (d.title || d))}</span>
              <span class="dl-conf">${typeof d === 'object' && d.confidence ? d.confidence.toFixed(2) : ''}</span>
            </div>`).join('')}
          </div>`
@@ -188,7 +202,7 @@ async function loadDigest() {
     container.innerHTML = `
       <div class="digest-header">
         <div class="digest-title">Weekly Digest</div>
-        <div class="digest-period">${data.period_label || ''}</div>
+        <div class="digest-period">${escHtml(data.period_label || '')}</div>
       </div>
       ${contraWarning}
       <div class="stats-grid">
@@ -222,7 +236,7 @@ async function loadDigest() {
         Run <code style="background:var(--surface-2);padding:1px 5px;border-radius:3px">smm digest</code> in your terminal for full output.
       </p>`;
   } catch (e) {
-    container.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠</div><div class="empty-title">Could not load digest</div><div class="empty-desc">${e.message}</div></div>`;
+    container.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠</div><div class="empty-title">Could not load digest</div><div class="empty-desc">${escHtml(e.message)}</div></div>`;
   }
 }
 

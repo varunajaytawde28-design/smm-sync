@@ -155,6 +155,20 @@ function showToast(msg) {
   t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2800);
 }
 
+function safeStr(v) {
+  if (v == null) return '';
+  return typeof v === 'string' ? v : String(v);
+}
+
+function escHtml(v) {
+  return safeStr(v)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function renderContradictions() {
   const list = document.getElementById('contradictions-list');
   const unresolved = allContradictions.filter(c => !c.resolved);
@@ -174,9 +188,9 @@ function renderContradictions() {
     return `<div class="contradiction-row${isResolved ? ' resolved' : ''}">
       <div class="con-icon">${isResolved ? '✓' : '⚠'}</div>
       <div class="con-text">
-        <div class="con-title">${c.title || c.decision_a + ' ↔ ' + c.decision_b || 'Contradiction'}</div>
-        <div class="con-desc">${c.description || c.reason || ''}</div>
-        ${c.resolved_at ? `<div class="con-meta">Resolved ${new Date(c.resolved_at).toLocaleDateString()} — ${c.resolution || ''}</div>` : ''}
+        <div class="con-title">${escHtml(c.title || (c.decision_a + ' ↔ ' + c.decision_b) || 'Contradiction')}</div>
+        <div class="con-desc">${escHtml(c.description || c.reason || '')}</div>
+        ${c.resolved_at ? `<div class="con-meta">Resolved ${new Date(c.resolved_at).toLocaleDateString()} — ${escHtml(c.resolution || '')}</div>` : ''}
       </div>
       ${action}
     </div>`;
