@@ -281,15 +281,26 @@ def init(ctx: click.Context, name: str, mode: str) -> None:
     _claude_dir = cwd / ".claude"
     _claude_dir.mkdir(exist_ok=True)
     _claude_settings_path = _claude_dir / "settings.json"
-    _pre_tool_hook = {
+    # Hook 1: allow get_project_context through immediately (must come first)
+    _allow_hook = {
+        "matcher": "mcp.*get_project_context",
+        "hooks": [
+            {
+                "type": "command",
+                "command": "bash -c 'exit 0'",
+            }
+        ],
+    }
+    # Hook 2: block ALL other tools until the lock file (created by get_project_context) exists
+    _block_hook = {
         "matcher": ".*",
         "hooks": [
             {
                 "type": "command",
                 "command": (
                     "bash -c 'if [ ! -f /tmp/smm-session-$(printf \"%s\" \"$PWD\" | shasum | cut -c1-8).lock ];"
-                    " then echo \"\\u26a0\\ufe0f AXIOM HUB: You must call get_project_context before"
-                    " any other action. This loads architectural decisions and checks for"
+                    " then echo \"\u26a0\ufe0f AXIOM HUB: You must call the get_project_context MCP tool"
+                    " before any action. This loads architectural decisions and checks for"
                     " contradictions.\" >&2; exit 2; fi'"
                 ),
             }
@@ -305,14 +316,25 @@ def init(ctx: click.Context, name: str, mode: str) -> None:
         _settings["hooks"] = {}
     if "PreToolUse" not in _settings["hooks"]:
         _settings["hooks"]["PreToolUse"] = []
-    _hook_cmd = _pre_tool_hook["hooks"][0]["command"]
-    _existing_cmds = [
-        h.get("hooks", [{}])[0].get("command", "")
-        for h in _settings["hooks"]["PreToolUse"]
-        if isinstance(h, dict) and "hooks" in h
+    # Remove stale smm-managed hooks (identified by our unique lock-file signature or
+    # the old mcp__.* matcher) so re-running `smm init` is idempotent.
+    _SMM_SIG = "smm-session-"  # unique string present in all our block commands
+    _remaining_hooks = [
+        h for h in _settings["hooks"]["PreToolUse"]
+        if not (
+            isinstance(h, dict) and (
+                h.get("matcher") == "mcp__.*"  # old single-hook style
+                or h.get("matcher") == "mcp.*get_project_context"
+                or any(
+                    _SMM_SIG in hk.get("command", "")
+                    for hk in h.get("hooks", [])
+                    if isinstance(hk, dict)
+                )
+            )
+        )
     ]
-    if _hook_cmd not in _existing_cmds:
-        _settings["hooks"]["PreToolUse"].append(_pre_tool_hook)
+    # Prepend our two hooks so they run before any user-defined hooks
+    _settings["hooks"]["PreToolUse"] = [_allow_hook, _block_hook] + _remaining_hooks
     _claude_settings_path.write_text(_json_poly.dumps(_settings, indent=2), encoding="utf-8")
 
     # B) .cursor/rules/axiom-hub.mdc — Cursor alwaysApply rule

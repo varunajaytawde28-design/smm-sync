@@ -944,6 +944,15 @@ async def get_project_context(project: str = "smm-sync", session_id: str = "") -
 
     response = "\n".join(lines)
 
+    # Include AGENTS.md content so the agent gets decision capture rules in one call
+    agents_md_path = smm_dir.parent / "AGENTS.md"
+    if agents_md_path.exists():
+        try:
+            agents_md_content = agents_md_path.read_text(encoding="utf-8")
+            response += f"\n\n--- DECISION CAPTURE PROTOCOL ---\n{agents_md_content}"
+        except Exception:
+            pass
+
     # Auth check — warn if GitHub sync is broken (Fix 3)
     github_ok = await _check_github_auth()
     if not github_ok:
