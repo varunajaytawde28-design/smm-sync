@@ -122,11 +122,14 @@ class TestBoardMCPTools:
         (smm_dir / "board.json").write_text(json.dumps(board_data))
 
         original_smm_dir = mcp_mod._smm_dir
+        original_context_loaded = mcp_mod._context_loaded
         try:
             mcp_mod._smm_dir = smm_dir
+            mcp_mod._context_loaded = True
             result = await mcp_mod.get_board_items(status="all")
         finally:
             mcp_mod._smm_dir = original_smm_dir
+            mcp_mod._context_loaded = original_context_loaded
 
         assert "Migrate DB" in result
         assert "Add tests" in result
@@ -144,12 +147,15 @@ class TestBoardMCPTools:
         (smm_dir / "board.json").write_text(json.dumps(board_data))
 
         original_smm_dir = mcp_mod._smm_dir
+        original_context_loaded = mcp_mod._context_loaded
         try:
             mcp_mod._smm_dir = smm_dir
+            mcp_mod._context_loaded = True
             r1 = await mcp_mod.update_board_item(item_id=item_id, status="in_progress")
             r2 = await mcp_mod.update_board_item(item_id=item_id, status="in_progress")
         finally:
             mcp_mod._smm_dir = original_smm_dir
+            mcp_mod._context_loaded = original_context_loaded
 
         assert r1["success"] is True
         assert r2["success"] is True

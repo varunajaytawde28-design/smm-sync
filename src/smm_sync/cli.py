@@ -16,19 +16,141 @@ from smm_sync.ingester import ingest, load_parsed_context, migrate_smm_toml
 from smm_sync.state import get_current_state, propose
 
 _AGENTS_MD_TEMPLATE = """\
-# AGENTS.md — {name}
+# Project Architecture Memory — Powered by Axiom Hub
 
-> Source of truth for this project. Read before writing any code.
-> Edit this file directly. Run `smm refresh` after editing.
+You are a Senior Engineer whose primary obligation is the integrity of this project's architectural memory. Every implementation choice you make MUST be externalized through the Axiom Hub MCP tools.
+
+## Mandatory Startup Protocol
+Before writing ANY code in this session:
+1. Call `get_project_context` to load all active decisions and check for unresolved contradictions
+2. If contradictions exist (⚠ ACTION REQUIRED), stop and notify the user before proceeding
+3. Review active decisions to ensure your planned changes align with existing architecture
+
+---
 
 ## Project
 
+**Name:** {name}
+
 {name}: Describe what this project does and why it exists.
+
+---
+
+## Decision Capture Rules
+
+Call `add_decision` for ANY choice where two or more alternatives existed. Specifically:
+
+### Always Capture (type: architectural)
+- Database selection or configuration changes
+- API format decisions (REST vs GraphQL vs gRPC)
+- Service communication patterns (sync vs async, queues vs direct calls)
+- Authentication/authorization approach changes
+- Caching strategy choices
+- Deployment architecture changes
+
+### Always Capture (type: technical)
+- Library or framework selections (e.g., choosing axios over fetch)
+- Language or runtime version decisions
+- Database driver or ORM choices
+- Concurrency patterns (threading vs async vs multiprocessing)
+- Error handling strategies (retry logic, circuit breakers)
+- Logging and observability tool choices
+
+### Always Capture (type: product)
+- Feature scope decisions (what's in/out of this sprint)
+- User-facing behavior choices (defaults, fallbacks, error messages)
+- API contract decisions that affect consumers
+- Data format choices visible to users (CSV vs JSON vs PDF)
+
+### Always Capture (type: constraint)
+- Performance budgets (response time targets, memory limits)
+- Security requirements (encryption, auth standards, compliance)
+- Data residency or retention requirements
+- Team or timeline constraints affecting implementation
+- Cost limits affecting infrastructure choices
+
+### Do NOT Capture
+- Variable naming (unless it's a project-wide convention)
+- Import ordering
+- Minor formatting choices
+- Obvious single-option situations (no real alternative existed)
+
+---
+
+## Examples of Correct Decision Capture
+
+### Example 1: Database Driver Selection
+You're implementing a user service and choose asyncpg over psycopg2.
+
+Call: `add_decision`
+- title: "asyncpg for PostgreSQL connections in user-service"
+- description: "Selected asyncpg over psycopg2 for the user service. asyncpg provides native async/await support matching our FastAPI stack, 3x throughput on benchmarks for our read-heavy workload. psycopg2 would require thread pool executor wrapping."
+- type: "technical"
+- confidence: 0.9
+- made_by: "agent"
+
+### Example 2: Auth Pattern Change
+You're adding authentication and choose JWT with RS256 over session cookies.
+
+Call: `add_decision`
+- title: "JWT with RS256 signing for API authentication"
+- description: "Implementing stateless JWT auth with RS256 asymmetric signing instead of session-based cookies. Rationale: microservices architecture requires stateless auth — sessions would need shared Redis store adding infrastructure complexity. RS256 chosen over HS256 for key rotation support."
+- type: "architectural"
+- confidence: 0.95
+- made_by: "agent"
+
+### Example 3: Scope Constraint
+PM said no data export in v1, so you skip building the CSV endpoint.
+
+Call: `add_decision`
+- title: "No data export endpoints in v1 API"
+- description: "Skipping /api/export/csv and /api/export/pdf endpoints per product decision. V1 focuses on core CRUD operations only. Export functionality deferred to v2 backlog."
+- type: "product"
+- confidence: 0.85
+- made_by: "agent"
+
+---
+
+## When You Encounter Contradictions
+
+If `get_project_context` returns ⚠ UNRESOLVED CONTRADICTIONS:
+1. STOP — do not write code that depends on either contradicting decision
+2. Notify the user: "There are X unresolved contradictions that affect this work"
+3. List the specific contradictions relevant to your current task
+4. Wait for the user to resolve them on the dashboard (`smm dashboard`)
+5. Call `get_project_context` again after resolution to confirm
+
+If the isError gate blocks you:
+1. Read the error message — it tells you exactly what artifacts need cleanup
+2. Run the fix commands provided in the error
+3. Call `get_project_context` again to verify the block is cleared
+
+---
+
+## Decision Granularity — What's Worth Reporting
+
+| Tag | Category | Capture Threshold | Example |
+|-----|----------|------------------|---------|
+| FN | Functional | HIGH — any change to business rules | "Switching from batch to stream processing for order events" |
+| NF-P | Performance | MEDIUM — any latency/throughput impact | "Setting connection pool_size=5 for RDS memory optimization" |
+| NF-S | Security | LOW threshold (always capture) | "Login endpoint now uses OAuth2 form-data not JSON body" |
+| NF-O | Operability | MEDIUM — logging, monitoring changes | "Implemented asyncio.Lock for concurrency control" |
+| TEST | Testing | HIGH — new test strategies only | "Added automated latency regression tests for API v2" |
+| DOC | Documentation | LOW — major architectural shifts only | "Externalizing session state to Axiom Hub" |
+
+When in doubt, capture it. A dismissed decision costs nothing. A missed contradiction costs days.
+
+---
 
 ## Architecture
 
-### Example decision
-**Why:** Reason it was made.
+> Edit this section to describe your project's key architectural decisions.
+
+### Tech Stack
+- Language/Runtime: (fill in)
+- Framework: (fill in)
+- Database: (fill in)
+- Deployment: (fill in)
 
 ## Constraints
 
@@ -51,6 +173,36 @@ _AGENTS_MD_TEMPLATE = """\
 **What you are building right now.**
 
 Describe the current sprint or feature.
+"""
+
+_CURSOR_RULES_TEMPLATE = """\
+---
+description: Axiom Hub Context-as-a-Service integration
+alwaysApply: true
+---
+
+Before writing any code, call the `get_project_context` MCP tool to load architectural decisions and check for contradictions. Call `add_decision` for any implementation choice where alternatives existed.
+
+See AGENTS.md in the project root for full decision capture rules and examples.
+"""
+
+_AGENTS_SKILL_TEMPLATE = """\
+---
+name: axiom-caas-protocol
+description: Mandatory Context-as-a-Service integration. Use immediately upon session initialization and whenever architectural decisions are made.
+---
+
+# Axiom Hub Protocol
+
+Before any code changes:
+1. Call `get_project_context` to load active decisions and unresolved contradictions
+2. If contradictions exist, STOP and notify the user
+
+When making implementation choices:
+- Call `add_decision` for any choice where two or more alternatives existed
+- Include: title, description, type (architectural/technical/product/constraint), confidence (0.0-1.0)
+
+See AGENTS.md in the project root for full decision capture rules, few-shot examples, and the Nine-Box granularity framework.
 """
 
 _MCP_CONFIG_HINT = """\
@@ -112,13 +264,66 @@ def init(ctx: click.Context, name: str, mode: str) -> None:
     (smm_dir / "history").mkdir(exist_ok=True)
 
     git_root = find_git_root(cwd)
+    pre_commit_ok = False
     if git_root:
-        if install_pre_commit_hook(git_root):
-            click.echo(click.style("Installed pre-commit hook.", fg="green"))
+        pre_commit_ok = install_pre_commit_hook(git_root)
+        if pre_commit_ok:
+            pass  # reported in final summary below
         else:
             click.echo(click.style("Could not install pre-commit hook (no .git/hooks).", fg="yellow"))
     else:
         click.echo(click.style("Not in a git repo — skipping hook install.", fg="yellow"))
+
+    # ── Polyglot agent auto-discovery configs ─────────────────────────────────
+    import json as _json_poly
+
+    # A) .claude/settings.json — project-level PreToolUse hook for Claude Code
+    _claude_dir = cwd / ".claude"
+    _claude_dir.mkdir(exist_ok=True)
+    _claude_settings_path = _claude_dir / "settings.json"
+    _pre_tool_hook = {
+        "matcher": ".*",
+        "hooks": [
+            {
+                "type": "command",
+                "command": (
+                    "bash -c 'if [ ! -f /tmp/smm-session-$(printf \"%s\" \"$PWD\" | shasum | cut -c1-8).lock ];"
+                    " then echo \"\\u26a0\\ufe0f AXIOM HUB: You must call get_project_context before"
+                    " any other action. This loads architectural decisions and checks for"
+                    " contradictions.\" >&2; exit 2; fi'"
+                ),
+            }
+        ],
+    }
+    _settings: dict = {}
+    if _claude_settings_path.exists():
+        try:
+            _settings = _json_poly.loads(_claude_settings_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    if "hooks" not in _settings:
+        _settings["hooks"] = {}
+    if "PreToolUse" not in _settings["hooks"]:
+        _settings["hooks"]["PreToolUse"] = []
+    _hook_cmd = _pre_tool_hook["hooks"][0]["command"]
+    _existing_cmds = [
+        h.get("hooks", [{}])[0].get("command", "")
+        for h in _settings["hooks"]["PreToolUse"]
+        if isinstance(h, dict) and "hooks" in h
+    ]
+    if _hook_cmd not in _existing_cmds:
+        _settings["hooks"]["PreToolUse"].append(_pre_tool_hook)
+    _claude_settings_path.write_text(_json_poly.dumps(_settings, indent=2), encoding="utf-8")
+
+    # B) .cursor/rules/axiom-hub.mdc — Cursor alwaysApply rule
+    _cursor_rules_dir = cwd / ".cursor" / "rules"
+    _cursor_rules_dir.mkdir(parents=True, exist_ok=True)
+    (_cursor_rules_dir / "axiom-hub.mdc").write_text(_CURSOR_RULES_TEMPLATE, encoding="utf-8")
+
+    # C) .agents/skills/axiom-caas/SKILL.md — universal agentskills.io standard
+    _agents_skill_dir = cwd / ".agents" / "skills" / "axiom-caas"
+    _agents_skill_dir.mkdir(parents=True, exist_ok=True)
+    (_agents_skill_dir / "SKILL.md").write_text(_AGENTS_SKILL_TEMPLATE, encoding="utf-8")
 
     # Install Axiom Lore-Hook (dev mode only)
     if mode != "dashboard":
@@ -170,15 +375,27 @@ def init(ctx: click.Context, name: str, mode: str) -> None:
                 err=True,
             )
 
+    # ── Final summary ─────────────────────────────────────────────────────────
+    click.echo("")
+    click.echo(click.style("✓ AGENTS.md generated (Cursor, Copilot, Devin, Codex — auto-read)", fg="green"))
+    click.echo(click.style("✓ .claude/settings.json generated (Claude Code — PreToolUse hook)", fg="green"))
+    click.echo(click.style("✓ .cursor/rules/axiom-hub.mdc generated (Cursor — alwaysApply)", fg="green"))
+    click.echo(click.style("✓ .agents/skills/axiom-caas/SKILL.md generated (Cline, Windsurf — universal)", fg="green"))
+    if pre_commit_ok:
+        click.echo(click.style("✓ Pre-commit hook installed", fg="green"))
+    click.echo(click.style("✓ MCP server configured", fg="green"))
+    click.echo("")
+    click.echo("Your AI agent will now automatically:")
+    click.echo("  1. Load project context at session start")
+    click.echo("  2. Capture architectural decisions as it codes")
+    click.echo("  3. Get blocked if unresolved contradictions exist")
+    click.echo("")
+
     if mode == "dashboard":
         click.echo(click.style("\nDashboard mode — launching web UI...", fg="cyan"))
         ctx.invoke(dashboard)
     else:
         click.echo(_MCP_CONFIG_HINT)
-        click.echo(click.style(
-            "MCP server ready. Start coding — decisions are captured automatically.",
-            fg="green",
-        ))
 
 
 @main.command()
@@ -1160,25 +1377,22 @@ def check_cmd(check_all: bool, project: str) -> None:
                     err=True,
                 )
 
-        # 2. Contradiction detection via claude -p (once for all new decisions)
+        # 2. Contradiction detection via claude -p (chunked batches of 20 pairs)
         new_contras_count = 0
         if all_new_titles and agent_cfg != "skip":
             try:
-                all_decisions_now = await client.get_decisions(project=project)
-                _numbered = "\n".join(
-                    f"{i+1}. {d.title}: {(d.rationale or d.content or '').strip()[:120]}"
-                    for i, d in enumerate(all_decisions_now)
-                )
-                prompt = (
-                    f"Here are all architectural decisions for this project:\n{_numbered}\n\n"
-                    "Find any pairs that directly contradict each other (e.g. conflicting tech choices, "
-                    "opposing strategies). Output JSON array only: "
-                    '[{"decision_a":"<title>","decision_b":"<title>","reason":"<brief>"}]. '
-                    "Empty array [] if none."
-                )
-                # Strip CLAUDECODE env vars for nested session safety
                 import subprocess as _sp
                 import tempfile as _tempfile
+                import re as _re
+                import uuid as _uuid_mod
+                all_decisions_now = await client.get_decisions(project=project)
+                # Build all unique pairs explicitly
+                _all_pairs = [
+                    (all_decisions_now[_i], all_decisions_now[_j])
+                    for _i in range(len(all_decisions_now))
+                    for _j in range(_i + 1, len(all_decisions_now))
+                ]
+                # Strip CLAUDECODE env vars for nested session safety
                 _safe_env = os.environ.copy()
                 for _var in [
                     "CLAUDECODE",
@@ -1188,67 +1402,131 @@ def check_cmd(check_all: bool, project: str) -> None:
                 ]:
                     _safe_env.pop(_var, None)
                 _safe_env["CLAUDE_CODE_TMPDIR"] = _tempfile.mkdtemp(prefix="smm-check-")
-
-                _result = await _asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda: _sp.run(
-                        ["claude", "-p", prompt],
-                        capture_output=True, text=True,
-                        timeout=600, env=_safe_env,
-                    ),
-                )
-                if _result.returncode == 0:
-                    import re as _re
-                    _raw = _result.stdout.strip()
-                    _m = _re.search(r"\[.*\]", _raw, _re.DOTALL)
-                    if _m:
-                        try:
-                            _contras = _json.loads(_m.group(0))
-                            contra_path = smm_dir / "contradictions.jsonl"
-                            import uuid as _uuid_mod
-                            now_ts = _datetime.now(_timezone.utc).strftime(
-                                "%Y-%m-%dT%H:%M:%SZ"
-                            )
-                            # Load existing pair keys to skip reversed duplicates
-                            _cli_seen_keys: set[tuple] = set()
+                contra_path = smm_dir / "contradictions.jsonl"
+                # Load existing pair keys to skip reversed duplicates,
+                # and collect superseded/loser decision titles to skip noise.
+                _cli_seen_keys: set[tuple] = set()
+                _cli_superseded_titles: set[str] = set()
+                try:
+                    if contra_path.exists():
+                        for _ln in contra_path.read_text(encoding="utf-8").splitlines():
+                            _ln = _ln.strip()
+                            if _ln:
+                                try:
+                                    _ex = _json.loads(_ln)
+                                    _da = (_ex.get("decision_a", "") or "").lower().strip()
+                                    _db = (_ex.get("decision_b", "") or "").lower().strip()
+                                    if _da and _db:
+                                        _cli_seen_keys.add(tuple(sorted([_da, _db])))
+                                    # Track superseded (losing) decisions from resolved contradictions
+                                    _is_resolved = (
+                                        _ex.get("resolved", False)
+                                        or _ex.get("status", "") in ("resolved", "dismissed", "ignored")
+                                    )
+                                    if _is_resolved:
+                                        _loser = (_ex.get("loser", "") or "").lower().strip()
+                                        if _loser:
+                                            _cli_superseded_titles.add(_loser)
+                                        # Infer loser when resolved_winner is set (demo/old format)
+                                        _winner = (_ex.get("resolved_winner", "") or _ex.get("winner", "") or "").lower().strip()
+                                        if _winner:
+                                            _other = _db if _winner == _da else (_da if _winner == _db else "")
+                                            if _other:
+                                                _cli_superseded_titles.add(_other)
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+                # Also collect superseded decisions from decisions.jsonl
+                try:
+                    _decisions_path = smm_dir / "decisions.jsonl"
+                    if _decisions_path.exists():
+                        for _ln in _decisions_path.read_text(encoding="utf-8").splitlines():
+                            _ln = _ln.strip()
+                            if _ln:
+                                try:
+                                    _d = _json.loads(_ln)
+                                    if _d.get("status") == "superseded" or _d.get("superseded_by"):
+                                        _dt = (_d.get("title", "") or "").lower().strip()
+                                        if _dt:
+                                            _cli_superseded_titles.add(_dt)
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+                _chunk_size = 20
+                _chunks = [_all_pairs[_k:_k + _chunk_size] for _k in range(0, len(_all_pairs), _chunk_size)]
+                _total_batches = len(_chunks)
+                for _batch_idx, _batch_pairs in enumerate(_chunks):
+                    _batch_num = _batch_idx + 1
+                    _pair_start = _batch_idx * _chunk_size + 1
+                    _pair_end = _pair_start + len(_batch_pairs) - 1
+                    click.echo(
+                        f"  Checking batch {_batch_num}/{_total_batches} (pairs {_pair_start}-{_pair_end})...",
+                        err=True,
+                    )
+                    _pair_lines = []
+                    for _pi, (_d_a, _d_b) in enumerate(_batch_pairs):
+                        _a_text = f"{_d_a.title}: {((_d_a.rationale or _d_a.content or '').strip()[:120])}"
+                        _b_text = f"{_d_b.title}: {((_d_b.rationale or _d_b.content or '').strip()[:120])}"
+                        _pair_lines.append(f'Pair {_pi + 1}: A="{_a_text}" B="{_b_text}"')
+                    _prompt = (
+                        "Do any of these decision pairs directly contradict each other "
+                        "(e.g. conflicting tech choices, opposing strategies)?\n"
+                        + "\n".join(_pair_lines)
+                        + "\n\nOutput JSON array only: "
+                        '[{"decision_a":"<title>","decision_b":"<title>","reason":"<brief>"}]. '
+                        "Empty array [] if none."
+                    )
+                    _result = await _asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda _p=_prompt: _sp.run(
+                            ["claude", "-p", "--model", "claude-haiku-4-5-20251001", _p],
+                            capture_output=True, text=True,
+                            timeout=600, env=_safe_env,
+                        ),
+                    )
+                    _batch_found = 0
+                    if _result.returncode == 0:
+                        _raw = _result.stdout.strip()
+                        _m = _re.search(r"\[.*\]", _raw, _re.DOTALL)
+                        if _m:
                             try:
-                                if contra_path.exists():
-                                    for _ln in contra_path.read_text(encoding="utf-8").splitlines():
-                                        _ln = _ln.strip()
-                                        if _ln:
-                                            try:
-                                                _ex = _json.loads(_ln)
-                                                _da = (_ex.get("decision_a", "") or "").lower().strip()
-                                                _db = (_ex.get("decision_b", "") or "").lower().strip()
-                                                if _da and _db:
-                                                    _cli_seen_keys.add(tuple(sorted([_da, _db])))
-                                            except Exception:
-                                                pass
+                                _contras = _json.loads(_m.group(0))
+                                now_ts = _datetime.now(_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                                for _c in _contras:
+                                    _da_t = _c.get("decision_a", "")
+                                    _db_t = _c.get("decision_b", "")
+                                    if _da_t.lower().strip() == _db_t.lower().strip():
+                                        continue
+                                    _pk = tuple(sorted([_da_t.lower().strip(), _db_t.lower().strip()]))
+                                    if _pk in _cli_seen_keys:
+                                        continue
+                                    # Skip if either decision is already superseded
+                                    if (
+                                        _da_t.lower().strip() in _cli_superseded_titles
+                                        or _db_t.lower().strip() in _cli_superseded_titles
+                                    ):
+                                        continue
+                                    _cli_seen_keys.add(_pk)
+                                    _entry = {
+                                        "id": str(_uuid_mod.uuid4()),
+                                        "decision_a": _da_t,
+                                        "decision_b": _db_t,
+                                        "reason": _c.get("reason", ""),
+                                        "detected_at": now_ts,
+                                        "resolved": False,
+                                    }
+                                    with open(contra_path, "a", encoding="utf-8") as _fh:
+                                        _fh.write(_json.dumps(_entry) + "\n")
+                                    new_contras_count += 1
+                                    _batch_found += 1
                             except Exception:
                                 pass
-                            for _c in _contras:
-                                _da_t = _c.get("decision_a", "")
-                                _db_t = _c.get("decision_b", "")
-                                # Skip self-contradictions and reversed duplicates
-                                if _da_t.lower().strip() == _db_t.lower().strip():
-                                    continue
-                                _pk = tuple(sorted([_da_t.lower().strip(), _db_t.lower().strip()]))
-                                if _pk in _cli_seen_keys:
-                                    continue
-                                _cli_seen_keys.add(_pk)
-                                _entry = {
-                                    "id": str(_uuid_mod.uuid4()),
-                                    "decision_a": _da_t,
-                                    "decision_b": _db_t,
-                                    "reason": _c.get("reason", ""),
-                                    "detected_at": now_ts,
-                                    "resolved": False,
-                                }
-                                with open(contra_path, "a", encoding="utf-8") as _fh:
-                                    _fh.write(_json.dumps(_entry) + "\n")
-                                new_contras_count += 1
-                        except Exception:
-                            pass
+                    click.echo(
+                        f"    found {_batch_found} contradiction(s)",
+                        err=True,
+                    )
             except Exception as _exc:
                 click.echo(
                     click.style(f"  claude -p check skipped: {_exc}", fg="yellow"),
@@ -1269,6 +1547,14 @@ def check_cmd(check_all: bool, project: str) -> None:
                             "%Y-%m-%dT%H:%M:%SZ"
                         )
                         for _c in _lc:
+                            _fb_a = (d_new.get("title", "") or "").lower().strip()
+                            _fb_b = (_c.get("existing", "") or "").lower().strip()
+                            # Skip if either decision is already superseded
+                            if (
+                                _fb_a in _cli_superseded_titles
+                                or _fb_b in _cli_superseded_titles
+                            ):
+                                continue
                             _entry = {
                                 "id": str(_uuid_mod.uuid4()),
                                 "decision_a": d_new.get("title", ""),
@@ -3021,7 +3307,7 @@ def discover_edges_cmd(project: str, use_local: bool) -> None:
         click.echo(f"  ⬡  Sending {len(rows)} decisions to claude -p...")
         try:
             proc = subprocess.run(
-                ["claude", "-p", prompt],
+                ["claude", "-p", "--model", "claude-haiku-4-5-20251001", prompt],
                 capture_output=True,
                 text=True,
                 timeout=600,

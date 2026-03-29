@@ -178,7 +178,8 @@ class TestCaptureAuthFailure:
         with patch.object(mcp_server, "_get_graph_client", return_value=mock_client), \
              patch.object(mcp_server, "_check_github_auth", new=AsyncMock(return_value=False)), \
              patch.object(mcp_server, "_get_smm_dir", return_value=Path("/tmp/smm")), \
-             patch.object(mcp_server, "_get_lineage_logger", return_value=None):
+             patch.object(mcp_server, "_get_lineage_logger", return_value=None), \
+             patch.object(mcp_server, "_context_loaded", True):
             result = await mcp_server.check_constraints(
                 proposed_action="test action",
                 project="test",

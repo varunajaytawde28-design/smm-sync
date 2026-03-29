@@ -21,16 +21,19 @@ def reset_mcp_globals(tmp_path: Path):
     """Reset module-level globals before each test."""
     old_smm_dir = _mcp_module._smm_dir
     old_graph_client = _mcp_module._graph_client
+    old_context_loaded = _mcp_module._context_loaded
 
     smm_dir = tmp_path / ".smm"
     smm_dir.mkdir()
     _mcp_module._smm_dir = smm_dir
     _mcp_module._graph_client = None
+    _mcp_module._context_loaded = True  # bypass session gate in unit tests
 
     yield smm_dir
 
     _mcp_module._smm_dir = old_smm_dir
     _mcp_module._graph_client = old_graph_client
+    _mcp_module._context_loaded = old_context_loaded
 
 
 # ---------------------------------------------------------------------------

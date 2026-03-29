@@ -27,9 +27,12 @@ def agents_md(tmp_path):
 @pytest.fixture(autouse=True)
 def configure_server(smm_dir):
     """Point the MCP module at the tmp smm_dir for each test."""
+    old_context_loaded = mcp_module._context_loaded
     mcp_module._smm_dir = smm_dir
+    mcp_module._context_loaded = True  # bypass session gate in unit tests
     yield
     mcp_module._smm_dir = None
+    mcp_module._context_loaded = old_context_loaded
 
 
 # ---------------------------------------------------------------------------

@@ -24,6 +24,7 @@ CaaS tools (3):
 """
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import logging
@@ -46,6 +47,17 @@ logger = logging.getLogger(__name__)
 mcp = FastMCP("smm-sync")
 _smm_dir: Path | None = None
 _graph_client = None  # Lazy-initialised GraphClient
+_context_loaded: bool = False  # Set to True after get_project_context succeeds
+_project_hash: str = ""  # SHA-256[:8] of project root path, set in run_server
+
+_SESSION_NOT_INIT_ERROR = {
+    "content": [{"type": "text", "text": (
+        "⚠️ SESSION NOT INITIALIZED: You must call get_project_context before using "
+        "any other Axiom Hub tool. This loads your project's architectural decisions "
+        "and checks for unresolved contradictions."
+    )}],
+    "isError": True,
+}
 
 
 def _is_session_killed(session_id: str) -> bool:
@@ -260,6 +272,9 @@ def read_context() -> str:
     Returns:
         Formatted string combining AGENTS.md content with live state.
     """
+    global _context_loaded
+    if not _context_loaded:
+        return _SESSION_NOT_INIT_ERROR
     smm_dir = _get_smm_dir()
     agents_md = _get_agents_md()
 
@@ -313,6 +328,9 @@ def claim_file(filepath: str, session_id: str, task: str = "") -> dict:
             success (bool): True if claim succeeded.
             conflict (str): Description of conflict if success=False.
     """
+    global _context_loaded
+    if not _context_loaded:
+        return _SESSION_NOT_INIT_ERROR
     smm_dir = _get_smm_dir()
 
     if not _coord_claim(smm_dir, filepath, session_id):
@@ -343,6 +361,9 @@ def release_file(filepath: str, session_id: str) -> dict:
             success (bool): True if release succeeded.
             reason (str): Failure reason if success=False.
     """
+    global _context_loaded
+    if not _context_loaded:
+        return _SESSION_NOT_INIT_ERROR
     smm_dir = _get_smm_dir()
 
     result = propose(smm_dir, "file_released", session_id, {"filepath": filepath})
@@ -368,6 +389,9 @@ def refresh_context(session_id: str) -> dict:
             context (str): New parsed context summary if changed=True.
             reason (str): Reason for no change if changed=False.
     """
+    global _context_loaded
+    if not _context_loaded:
+        return _SESSION_NOT_INIT_ERROR
     smm_dir = _get_smm_dir()
     agents_md = _get_agents_md()
 
@@ -448,6 +472,17 @@ def _get_lineage_logger():
         return None
 
 
+def _mark_context_loaded() -> None:
+    """Mark this session as initialised and create the lock file for Claude Code hook."""
+    global _context_loaded
+    _context_loaded = True
+    if _project_hash:
+        try:
+            Path(f"/tmp/smm-session-{_project_hash}.lock").touch()
+        except Exception:
+            pass
+
+
 def _time_saved_footer() -> str:
     """Build a one-line time saved footer for MCP tool responses.
 
@@ -520,6 +555,9 @@ async def query_decisions(
     Returns:
         Formatted string of relevant decisions with rationale.
     """
+    global _context_loaded
+    if not _context_loaded:
+        return _SESSION_NOT_INIT_ERROR
     if session_id and _is_session_killed(session_id):
         return _KILLED_MESSAGE
     client = _get_graph_client()
@@ -584,15 +622,10 @@ async def add_decision(
     decision_type: str = "technical",
     confidence: float | None = None,
 ) -> dict:
-    """Record a new team decision in the knowledge graph.
+    """Record an architectural, technical, product, or constraint decision.
 
-    Call this after making any architectural, technical, or product decision
-    during a coding session. This ensures future sessions (human or AI)
-    understand why the code was written this way.
-
-    Automatically checks for contradictions with existing decisions and
-    calculates a confidence score. Contradictions are noted but never block
-    the write — the old decision is preserved as the audit trail.
+    Call whenever choosing between two or more alternatives. Required fields:
+    title, description, type, confidence.
 
     Args:
         title: Short title of the decision.
@@ -602,11 +635,15 @@ async def add_decision(
         project: Project name (default: smm-sync).
         constraints: Known constraints imposed by this decision.
         alternatives: Alternatives that were considered.
-        decision_type: One of 'architectural', 'technical', 'product'.
+        decision_type: One of 'architectural', 'technical', 'product', 'constraint'.
+        confidence: Confidence score (0.0–1.0).
 
     Returns:
         Dict with keys: success (bool), decision_id (str) or error (str).
     """
+    global _context_loaded
+    if not _context_loaded:
+        return _SESSION_NOT_INIT_ERROR
     if confidence is not None and not (0.0 <= confidence <= 1.0):
         return {"success": False, "error": f"Confidence must be between 0.0 and 1.0, got {confidence!r}"}
     client = _get_graph_client()
@@ -638,6 +675,24 @@ async def add_decision(
                 alternatives=list(alternatives),
                 decision_type=decision_type,
             )
+
+        # Bug 4 fix: also write to decisions.jsonl so `smm check` can see it.
+        try:
+            from smm_sync.jsonl_writer import write_decision as _write_decision
+            _write_decision({
+                "title": title,
+                "rationale": rationale or content,
+                "type": decision_type,
+                "confidence": confidence,
+                "alternatives": list(alternatives),
+                "constraints": list(constraints),
+                "made_by": made_by,
+                "project": project,
+                "source": "mcp",
+            }, project=project)
+        except Exception:
+            pass  # never block graph write on JSONL failure
+
         return {"success": True, "decision_id": decision_id}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -645,13 +700,10 @@ async def add_decision(
 
 @mcp.tool(structured_output=False)
 async def get_project_context(project: str = "smm-sync", session_id: str = "") -> str:
-    """Get comprehensive project context: all active decisions, constraints, danger zones.
+    """CRITICAL: Must be called FIRST before any other tool in every new session.
 
-    Primary source: .smm/decisions.jsonl (always current, written by smm add-decision).
-    Secondary source: Kuzu graph (for edge data; used as fallback when JSONL absent).
-
-    Call this at the START of any coding session to ground yourself in the project's
-    current state before making changes.
+    Returns active architectural decisions, unresolved contradictions, and
+    project configuration.
 
     Args:
         project: Project name (default: smm-sync).
@@ -671,6 +723,9 @@ async def get_project_context(project: str = "smm-sync", session_id: str = "") -
     violations = _run_verification(smm_dir)
     if violations:
         raise RuntimeError(_build_block_message(violations))
+
+    # Session is valid — mark as initialised so other tools become available.
+    _mark_context_loaded()
 
     # ── Primary source: decisions.jsonl ──────────────────────────────────────
     _jsonl_path = smm_dir / "decisions.jsonl"
@@ -926,6 +981,9 @@ async def check_constraints(
             warnings (list[str]): Decisions worth reviewing before proceeding.
             clear (bool): True if no conflicts or warnings found.
     """
+    global _context_loaded
+    if not _context_loaded:
+        return _SESSION_NOT_INIT_ERROR
     if session_id and _is_session_killed(session_id):
         return {"conflicts": [_KILLED_MESSAGE], "warnings": [], "clear": False}
     client = _get_graph_client()
@@ -1026,6 +1084,9 @@ async def get_decision_timeline(
         Chronological timeline of all decisions related to the topic,
         with superseded decisions marked but not hidden.
     """
+    global _context_loaded
+    if not _context_loaded:
+        return _SESSION_NOT_INIT_ERROR
     client = _get_graph_client()
     if client is None:
         return "Context graph unavailable. Run `smm seed-graph` to populate it."
@@ -1074,6 +1135,9 @@ async def get_compliance_lineage(
     Returns:
         Formatted audit trail string.
     """
+    global _context_loaded
+    if not _context_loaded:
+        return _SESSION_NOT_INIT_ERROR
     logger = _get_lineage_logger()
     if logger is None:
         return "Compliance lineage logger unavailable."
@@ -1136,6 +1200,9 @@ async def add_constraint(
     Returns:
         Dict with keys: success (bool), constraint_id (str) or error (str).
     """
+    global _context_loaded
+    if not _context_loaded:
+        return _SESSION_NOT_INIT_ERROR
     client = _get_graph_client()
     if client is None:
         return {"success": False, "error": "Context graph unavailable."}
@@ -1211,6 +1278,9 @@ async def get_path_context(
         Formatted string of relevant rules and constraints (up to 3).
         Returns a "no specific rules" message if the graph is empty or unavailable.
     """
+    global _context_loaded
+    if not _context_loaded:
+        return _SESSION_NOT_INIT_ERROR
     client = _get_graph_client()
     if client is None:
         return "Context graph unavailable."
@@ -1243,6 +1313,9 @@ async def get_board_items(
     Returns:
         Formatted markdown list of board items.
     """
+    global _context_loaded
+    if not _context_loaded:
+        return _SESSION_NOT_INIT_ERROR
     smm_dir = _get_smm_dir()
     items = _read_board(smm_dir)
     if not items:
@@ -1288,6 +1361,9 @@ async def update_board_item(
     Returns:
         Dict with keys: success (bool), id (str), action ("created" or "updated").
     """
+    global _context_loaded
+    if not _context_loaded:
+        return _SESSION_NOT_INIT_ERROR
     import uuid
     from datetime import datetime, timezone
 
@@ -1355,8 +1431,10 @@ def run_server(smm_dir: Path) -> None:
     Args:
         smm_dir: Path to the .smm directory for this project.
     """
-    global _smm_dir
+    global _smm_dir, _project_hash
     _smm_dir = smm_dir
+    _project_hash = hashlib.sha1(os.getcwd().encode()).hexdigest()[:8]
+    atexit.register(lambda: Path(f"/tmp/smm-session-{_project_hash}.lock").unlink(missing_ok=True))
 
     # Root-Cause-1 fix: dashboard runs in same process → shares _graph_client
     # singleton → single Kuzu writer → no "Could not set lock on file" errors.

@@ -107,10 +107,12 @@ class TestDejaVuInQueryDecisions:
             )
         ])
         mcp_mod._graph_client = mock_client
+        mcp_mod._context_loaded = True
 
         result = asyncio.run(mcp_mod.query_decisions(query="file locking approach"))
         assert "DÉJÀ VU" in result or "deja vu" in result.lower() or "VU" in result
         mcp_mod._graph_client = None
+        mcp_mod._context_loaded = False
 
     def test_no_deja_vu_warning_when_no_rejections(self):
         """query_decisions output has no warning when no rejections found."""
