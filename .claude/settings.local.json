@@ -37,7 +37,22 @@
       "Bash(done)",
       "Bash(ps:*)",
       "Bash(pkill:*)",
-      "Bash(smm discover-edges:*)"
+      "Bash(smm discover-edges:*)",
+      "Bash(git:*)",
+      "Bash(rm -rf /tmp/demo-test/.smm)",
+      "Bash(mkdir -p /tmp/demo-test)",
+      "Read(//tmp/demo-test/.smm/**)",
+      "Bash(rm -rf /tmp/demo-verify)",
+      "Bash(mkdir -p /tmp/demo-verify)",
+      "Read(//tmp/demo-verify/.smm/**)",
+      "Read(//private/tmp/dunder-mifflin-qa/**)",
+      "Bash(rm -f .smm/contradictions.jsonl)",
+      "Bash(smm check)",
+      "Bash(echo Shell PWD: $PWD:*)",
+      "Read(//private/tmp/init-test/**)",
+      "Bash(smm init --mode dev)",
+      "Bash(shasum)",
+      "Bash(wait:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

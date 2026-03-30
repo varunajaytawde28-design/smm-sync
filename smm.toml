@@ -1,58 +1,8 @@
 [project]
-name = "smm-sync"
-purpose = "Coordination layer for simultaneous AI agents working on the same codebase. Automatically compiles shared context (CLAUDE.md, .cursorrules, AGENTS.md) from a single source of truth (smm.toml) and coordinates file ownership using Tuple Space protocol."
-stack = ["python 3.11+", "click", "jinja2", "tomllib (stdlib)", "filelock"]
+name = "dunder-mifflin-digital"
+description = "Dunder Mifflin Paper Co — Digital Transformation"
+agents = ["claude-code", "cursor-agent"]
 
-[active_task]
-title = "Weekend 1: Core CLI + Compiler + Coordinator + State"
-description = "Implement smm init, compile, status, claim, release. Get to pip install -e . + all tests passing."
-files_in_scope = [
-  "src/smm_sync/cli.py",
-  "src/smm_sync/config.py",
-  "src/smm_sync/compiler.py",
-  "src/smm_sync/state.py",
-  "src/smm_sync/coordinator.py",
-]
-
-[arch_decisions]
-decisions = [
-  { what = "os.rename() for file claiming", why = "POSIX-atomic on both macOS and Linux. No external dependency, no daemon required, works in the same filesystem namespace." },
-  { what = "CRDT LWW-Register for state.json", why = "Multiple agents writing simultaneously need merge-safe state. LWW is the simplest CRDT that handles the 'last writer wins' semantic of task claiming." },
-  { what = "Jinja2 templates for output files", why = "Separates structure (smm.toml) from presentation (CLAUDE.md format). Templates can evolve without touching config schema." },
-  { what = "tomllib (Python 3.11 stdlib)", why = "No external TOML dependency. TOML chosen over YAML for pyproject.toml familiarity and no indentation-sensitivity." },
-  { what = "Three-layer architecture: Insight / Pheromone / Interaction", why = "Mirrors ant colony stigmergy: persistent rules (arch decisions), active signals (current locks), and history (RAG-accessible logs)." },
-]
-
-[constraints]
-known = [
-  "Python 3.11+ only — tomllib is stdlib in 3.11+",
-  "No network calls in Weekend 1 scope",
-  "coordinator.py must work on macOS and Linux (POSIX-atomic os.rename)",
-  "state.json must be human-readable JSON, never binary",
-]
-
-[danger_zones]
-zones = [
-  "Do not use os.rename() across filesystems — only atomic within the same filesystem",
-  "state.json LWW merge uses wall clock — clock skew between machines can cause wrong winner",
-  "Templates in src/smm_sync/templates/ are package data — must be listed in pyproject.toml package-data or they will be missing from installs",
-  "Do not write derived or computed fields into smm.toml — it is the source of truth, not a cache",
-]
-
-[modules]
-items = [
-  { name = "cli.py", description = "Click entry point: init, compile, status, claim, release", owner = "" },
-  { name = "config.py", description = "tomllib loader + SmmConfig dataclass validation", owner = "" },
-  { name = "compiler.py", description = "Renders Jinja2 templates to CLAUDE.md/.cursorrules/AGENTS.md", owner = "" },
-  { name = "coordinator.py", description = "Tuple Space: os.rename() atomic file claiming in .smm/locks/", owner = "" },
-  { name = "state.py", description = "CRDT LWW-Register: .smm/state.json read/write/merge", owner = "" },
-  { name = "git_utils.py", description = "Pre-commit hook installation + git diff parsing", owner = "" },
-]
-
-[conventions]
-items = [
-  "Every public function must have a docstring with Args and Returns",
-  "No network calls anywhere in Weekend 1 scope",
-  "All .smm/ writes use FileLock when filelock is available, fallback to direct write",
-  "Comments crediting axiom-hub: # adapted from axiom-hub/src/...",
-]
+[context]
+project_type = "enterprise-saas"
+stack = ["Python 3.12", "PostgreSQL", "Kubernetes", "AWS", "Kafka", "React/Next.js"]

@@ -1447,12 +1447,12 @@
       <div id="resolve-contradiction-title" style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px;"></div>
       <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">Choose which decision to keep:</div>
       <div class="choice-cards">
-        <div class="choice-card" id="choice-a-card" onclick="selectChoice('a')">
+        <div class="choice-card" id="choice-a-card" data-side="a">
           <div class="choice-card-label">Option A</div>
           <div class="choice-card-title" id="choice-a-title">&mdash;</div>
           <div class="choice-card-rationale" id="choice-a-rationale">&mdash;</div>
         </div>
-        <div class="choice-card" id="choice-b-card" onclick="selectChoice('b')">
+        <div class="choice-card" id="choice-b-card" data-side="b">
           <div class="choice-card-label">Option B</div>
           <div class="choice-card-title" id="choice-b-title">&mdash;</div>
           <div class="choice-card-rationale" id="choice-b-rationale">&mdash;</div>
@@ -1499,11 +1499,10 @@
     // ─── STATE ─────────────────────────────────────────────────────────────────
     var _recentDecisions = [];
     var _paletteIndex = -1;
-    var _resolveTarget = null;
-    var _resolveWinnerId = null;
-    var _resolveWinnerTitle = null;
-    var _resolveLoserId = null;
     var _contradictionsMap = {};
+    window._currentResolveContradiction = null;
+    window._resolveSelectedSide = null;
+    window._sidebarContras = [];
 
     // ─── HELPERS ───────────────────────────────────────────────────────────────
     function timeAgo(dateStr) {
@@ -1714,25 +1713,25 @@
 
       _contradictionsMap = {};
       contradictions.forEach(function(c) {
-        var id = c.id || c.uuid || '';
-        if (id) _contradictionsMap[id] = c;
+        if (!c.id && !c.uuid) c.id = Math.random().toString(36).slice(2);
+        _contradictionsMap[c.id || c.uuid] = c;
       });
 
       // Only show unresolved contradictions in this panel
       var unresolved = contradictions.filter(function(c) { return !c.resolved; });
       countEl.textContent = unresolved.length;
       contradictions = unresolved;
+      window._sidebarContras = contradictions;
 
       if (!contradictions || contradictions.length === 0) {
         container.innerHTML = '<div class="empty-panel">No contradictions detected</div>';
         return;
       }
 
-      container.innerHTML = contradictions.map(function(c) {
-        var id = c.id || c.uuid || Math.random().toString(36).slice(2);
+      container.innerHTML = contradictions.map(function(c, index) {
+        var id = c.id || c.uuid;
         var safeId = String(id).replace(/'/g, "\\'");
         var title = esc(c.title || c.name || 'Contradiction');
-        var safeTitle = (c.title || c.name || 'Contradiction').replace(/'/g, "\\'");
         var desc = esc(c.explanation || c.reason || c.description || c.details || '');
 
         return [
@@ -1740,7 +1739,7 @@
           '  <div class="contra-title">' + title + '</div>',
           desc ? '  <div class="contra-desc">' + desc + '</div>' : '',
           '  <div class="contra-actions">',
-          '    <button class="btn-sm-outline" onclick="openResolveModal(\'' + safeId + '\')">Resolve</button>',
+          '    <button class="btn-sm-outline" onclick="openResolveModal(' + index + ')">Resolve</button>',
           '    <button class="btn-sm-ghost" onclick="viewContradictionDiff(\'' + safeId + '\')">View diff</button>',
           '    <button class="btn-sm-ghost" onclick="ignoreContradiction(\'' + safeId + '\')" title="Not a real conflict — ignore this" style="color:var(--text-dim);margin-left:auto">Dismiss</button>',
           '  </div>',
@@ -2033,61 +2032,59 @@
     }
 
     // ─── RESOLVE MODAL ─────────────────────────────────────────────────────────
-    function openResolveModal(id) {
-      var c = _contradictionsMap[id];
+    function openResolveModal(idx) {
+      var c = window._sidebarContras[idx];
       if (!c) return;
-      _resolveTarget = id;
-      _resolveWinnerId = null;
-      _resolveWinnerTitle = null;
-      _resolveLoserId = null;
+      window._currentResolveContradiction = c;
+      window._resolveSelectedSide = null;
 
       document.getElementById('resolve-contradiction-title').textContent =
-        (c.decision_a || 'Decision A') + ' \u2194 ' + (c.decision_b || 'Decision B');
+        (c.decision_a || 'A') + ' \u2194 ' + (c.decision_b || 'B');
 
       var cardA = document.getElementById('choice-a-card');
       var cardB = document.getElementById('choice-b-card');
-      document.getElementById('choice-a-title').textContent = c.decision_a || 'Decision A';
-      document.getElementById('choice-a-rationale').textContent = c.decision_a_rationale || '(no rationale available)';
-      cardA.dataset.decisionId = c.decision_a_id || '';
-      cardA.dataset.decisionTitle = c.decision_a || '';
-      cardA.className = 'choice-card';
+      if (cardA) {
+        cardA.dataset.decisionId = c.decision_a_id || '';
+        var titleA = cardA.querySelector('.choice-card-title');
+        if (titleA) titleA.textContent = c.decision_a || 'Option A';
+        var rationaleA = cardA.querySelector('.choice-card-rationale');
+        if (rationaleA) rationaleA.textContent = c.decision_a_rationale || '(no rationale available)';
+        cardA.className = 'choice-card';
+      }
+      if (cardB) {
+        cardB.dataset.decisionId = c.decision_b_id || '';
+        var titleB = cardB.querySelector('.choice-card-title');
+        if (titleB) titleB.textContent = c.decision_b || 'Option B';
+        var rationaleB = cardB.querySelector('.choice-card-rationale');
+        if (rationaleB) rationaleB.textContent = c.decision_b_rationale || '(no rationale available)';
+        cardB.className = 'choice-card';
+      }
 
-      document.getElementById('choice-b-title').textContent = c.decision_b || 'Decision B';
-      document.getElementById('choice-b-rationale').textContent = c.decision_b_rationale || '(no rationale available)';
-      cardB.dataset.decisionId = c.decision_b_id || '';
-      cardB.dataset.decisionTitle = c.decision_b || '';
-      cardB.className = 'choice-card';
+      document.querySelectorAll('[data-side]').forEach(function(el) {
+        el.style.borderColor = '#ddd'; el.style.opacity = '0.7'; el.classList.remove('selected');
+      });
 
       document.getElementById('resolve-note').value = '';
       document.getElementById('resolve-modal-backdrop').classList.add('open');
       document.getElementById('resolve-modal').classList.add('open');
     }
 
-    function selectChoice(which) {
-      var cardA = document.getElementById('choice-a-card');
-      var cardB = document.getElementById('choice-b-card');
-      if (which === 'a') {
-        _resolveWinnerId = cardA.dataset.decisionId;
-        _resolveWinnerTitle = cardA.dataset.decisionTitle;
-        _resolveLoserId = cardB.dataset.decisionId;
-        cardA.className = 'choice-card selected';
-        cardB.className = 'choice-card dimmed';
-      } else {
-        _resolveWinnerId = cardB.dataset.decisionId;
-        _resolveWinnerTitle = cardB.dataset.decisionTitle;
-        _resolveLoserId = cardA.dataset.decisionId;
-        cardB.className = 'choice-card selected';
-        cardA.className = 'choice-card dimmed';
-      }
-    }
+    window._resolveSelectedSide = null;
+    document.addEventListener('click', function(e) {
+      var card = e.target.closest('[data-side]');
+      if (!card) return;
+      window._resolveSelectedSide = card.getAttribute('data-side');
+      document.querySelectorAll('[data-side]').forEach(function(el) {
+        el.style.borderColor = '#ddd'; el.style.opacity = '0.7';
+      });
+      card.style.borderColor = '#2563eb'; card.style.opacity = '1';
+    });
 
     function closeModal() {
       document.getElementById('resolve-modal-backdrop').classList.remove('open');
       document.getElementById('resolve-modal').classList.remove('open');
-      _resolveTarget = null;
-      _resolveWinnerId = null;
-      _resolveWinnerTitle = null;
-      _resolveLoserId = null;
+      window._currentResolveContradiction = null;
+      window._resolveSelectedSide = null;
     }
 
     async function ignoreContradiction(id) {
@@ -2106,22 +2103,31 @@
     }
 
     async function submitResolve() {
-      if (!_resolveTarget) return;
-      if (!_resolveWinnerId || !_resolveLoserId) {
+      if (!window._resolveSelectedSide) {
         showToast('Please choose which decision to keep', 'error');
         return;
       }
-      var note = document.getElementById('resolve-note').value.trim();
+      var c = window._currentResolveContradiction;
+      if (!c) { showToast('No contradiction selected', 'error'); return; }
+
+      var winnerId = window._resolveSelectedSide === 'a' ? (c.decision_a_id || '') : (c.decision_b_id || '');
+      var loserId = window._resolveSelectedSide === 'a' ? (c.decision_b_id || '') : (c.decision_a_id || '');
+      var noteEl = document.getElementById('resolve-note');
+      var note = noteEl ? noteEl.value.trim() : '';
+
+      closeModal();
       try {
-        var r = await fetch('/api/contradictions/' + _resolveTarget + '/resolve', {
+        var r = await fetch('/api/contradictions/' + encodeURIComponent(c.id) + '/resolve', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ winner_id: _resolveWinnerId, loser_id: _resolveLoserId, note: note }),
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({winner_id: winnerId, loser_id: loserId, note: note})
         });
-        if (!r.ok) throw new Error('Resolve failed');
-        showToast('\u2713 Kept: ' + _resolveWinnerTitle, 'success');
-        closeModal();
-        init();
+        if (r.ok) {
+          showToast('Contradiction resolved');
+          setTimeout(function() { location.reload(); }, 500);
+        } else {
+          showToast('Failed to resolve: ' + r.status, 'error');
+        }
       } catch(e) {
         showToast('Error: ' + e.message, 'error');
       }

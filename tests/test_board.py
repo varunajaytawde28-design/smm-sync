@@ -17,19 +17,17 @@ def client():
 
 @pytest.fixture
 def board_dir(tmp_path):
-    """Create a temp .smm directory with empty board.json."""
+    """Create a temp .smm directory (board now reads from contradictions.jsonl)."""
     smm_dir = tmp_path / ".smm"
     smm_dir.mkdir()
-    board = {"items": []}
-    (smm_dir / "board.json").write_text(json.dumps(board))
     return smm_dir
 
 
 class TestBoardCRUD:
-    """Full CRUD tests for the board API."""
+    """Tests for the board API (single source of truth: contradictions.jsonl)."""
 
     def test_get_empty_board(self, client, board_dir):
-        """GET /api/board returns empty grouped dict when board is empty."""
+        """GET /api/board returns empty grouped dict when no contradictions exist."""
         with patch("smm_sync.dashboard.app._get_smm_dir", return_value=board_dir):
             response = client.get("/api/board")
         assert response.status_code == 200
@@ -37,29 +35,108 @@ class TestBoardCRUD:
         assert data["items"] == []
         assert "backlog" in data["grouped"]
 
-    def test_create_and_retrieve_item(self, client, board_dir):
-        """POST + GET correctly stores and retrieves an item."""
+    def test_board_reads_from_contradictions_jsonl(self, client, board_dir):
+        """GET /api/board derives items from contradictions.jsonl, not board.json."""
+        cid = str(uuid.uuid4())
+        contradictions = [
+            {
+                "id": cid,
+                "decision_a": "Use PostgreSQL",
+                "decision_b": "Use SQLite",
+                "explanation": "Storage conflict",
+                "resolved": False,
+                "status": "pending",
+                "detected_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+        (board_dir / "contradictions.jsonl").write_text(
+            "\n".join(json.dumps(c) for c in contradictions)
+        )
+
         with patch("smm_sync.dashboard.app._get_smm_dir", return_value=board_dir):
-            create_resp = client.post("/api/board", json={
-                "title": "Migrate DB",
-                "type": "decision",
-                "description": "Should we migrate?",
-                "priority": "high",
+            response = client.get("/api/board")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["items"]) == 1
+        item = data["items"][0]
+        assert item["id"] == cid
+        assert item["_contradiction_id"] == cid
+        assert item["status"] == "backlog"
+        assert len(data["grouped"]["backlog"]) == 1
+        assert len(data["grouped"]["done"]) == 0
+
+    def test_resolved_contradiction_appears_in_done(self, client, board_dir):
+        """Resolved contradictions map to Done column with Resolved badge fields."""
+        cid = str(uuid.uuid4())
+        contradictions = [
+            {
+                "id": cid,
+                "decision_a": "Use Redis",
+                "decision_b": "Use Memcached",
+                "explanation": "Caching conflict",
+                "resolved": True,
+                "status": "resolved",
+                "winner": "Use Redis",
+                "note": "Redis has better persistence",
+                "detected_at": "2026-01-01T00:00:00Z",
+                "resolved_at": "2026-01-02T00:00:00Z",
+            }
+        ]
+        (board_dir / "contradictions.jsonl").write_text(
+            "\n".join(json.dumps(c) for c in contradictions)
+        )
+
+        with patch("smm_sync.dashboard.app._get_smm_dir", return_value=board_dir):
+            response = client.get("/api/board")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["grouped"]["done"]) == 1
+        assert len(data["grouped"]["backlog"]) == 0
+        item = data["grouped"]["done"][0]
+        assert item["_resolved_winner"] == "Use Redis"
+        assert "_dismissed" not in item
+
+    def test_dismissed_contradiction_appears_in_done(self, client, board_dir):
+        """Dismissed/ignored contradictions map to Done column with Dismissed badge."""
+        cid = str(uuid.uuid4())
+        contradictions = [
+            {
+                "id": cid,
+                "decision_a": "Use A",
+                "decision_b": "Use B",
+                "explanation": "Not a real conflict",
+                "resolved": True,
+                "status": "ignored",
+                "detected_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+        (board_dir / "contradictions.jsonl").write_text(
+            "\n".join(json.dumps(c) for c in contradictions)
+        )
+
+        with patch("smm_sync.dashboard.app._get_smm_dir", return_value=board_dir):
+            response = client.get("/api/board")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["grouped"]["done"]) == 1
+        item = data["grouped"]["done"][0]
+        assert item.get("_dismissed") is True
+
+    def test_create_item_returns_501(self, client, board_dir):
+        """POST /api/board returns 501 — manual items not supported."""
+        with patch("smm_sync.dashboard.app._get_smm_dir", return_value=board_dir):
+            response = client.post("/api/board", json={
+                "title": "Manual task",
+                "type": "task",
             })
-            assert create_resp.status_code == 200
-            item_id = create_resp.json()["item"]["id"]
+        assert response.status_code == 501
 
-            get_resp = client.get("/api/board")
-            assert get_resp.status_code == 200
-            items = get_resp.json()["items"]
-            assert any(i["id"] == item_id for i in items)
-
-    def test_update_item_status_idempotent(self, client, board_dir):
-        """PATCH with same status twice is idempotent (no error)."""
+    def test_update_item_noop(self, client, board_dir):
+        """PATCH /api/board/{id} is a no-op that returns 200."""
         item_id = str(uuid.uuid4())
-        board_data = {"items": [{"id": item_id, "title": "Test", "status": "backlog", "type": "task"}]}
-        (board_dir / "board.json").write_text(json.dumps(board_data))
-
         with patch("smm_sync.dashboard.app._get_smm_dir", return_value=board_dir):
             r1 = client.patch(f"/api/board/{item_id}", json={"status": "in_progress"})
             r2 = client.patch(f"/api/board/{item_id}", json={"status": "in_progress"})
@@ -67,20 +144,35 @@ class TestBoardCRUD:
         assert r1.status_code == 200
         assert r2.status_code == 200
 
-    def test_resolve_board_item_creates_graph_decision(self, client, board_dir):
-        """POST /api/board/{id}/resolve calls add_decision and marks done."""
+    def test_delete_item_returns_501(self, client, board_dir):
+        """DELETE /api/board/{id} returns 501 — use contradictions API instead."""
         item_id = str(uuid.uuid4())
-        board_data = {"items": [{"id": item_id, "title": "Migration question", "status": "backlog", "type": "decision", "created_by": "varun"}]}
-        (board_dir / "board.json").write_text(json.dumps(board_data))
+        with patch("smm_sync.dashboard.app._get_smm_dir", return_value=board_dir):
+            response = client.delete(f"/api/board/{item_id}")
+        assert response.status_code == 501
+
+    def test_resolve_board_item_creates_graph_decision(self, client, board_dir):
+        """POST /api/board/{id}/resolve resolves the contradiction and writes a decision."""
+        cid = str(uuid.uuid4())
+        contradictions = [
+            {
+                "id": cid,
+                "decision_a": "Migrate DB",
+                "decision_b": "Stay on current",
+                "explanation": "Migration question",
+                "resolved": False,
+                "status": "pending",
+                "detected_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+        (board_dir / "contradictions.jsonl").write_text(json.dumps(contradictions[0]))
 
         with patch("smm_sync.dashboard.app._get_smm_dir", return_value=board_dir):
-            with patch("smm_sync.context_graph.client.GraphClient.add_decision", new_callable=AsyncMock) as mock_add:
-                mock_add.return_value = "decision-uuid-123"
-                response = client.post(f"/api/board/{item_id}/resolve", json={
-                    "decision": "We will migrate to FalkorDB",
-                    "rationale": "Docker now available",
-                    "alternatives": ["Stay on Kuzu"],
-                })
+            response = client.post(f"/api/board/{cid}/resolve", json={
+                "decision": "We will migrate to FalkorDB",
+                "rationale": "Docker now available",
+                "alternatives": ["Stay on Kuzu"],
+            })
 
         assert response.status_code == 200
         data = response.json()
@@ -88,11 +180,9 @@ class TestBoardCRUD:
         assert "decision_id" in data
 
     def test_resolve_board_item_idempotent(self, client, board_dir):
-        """POST /api/board/{id}/resolve twice returns idempotent=True on second call."""
+        """POST /api/board/{id}/resolve with unknown id returns idempotent=True."""
         item_id = str(uuid.uuid4())
-        board_data = {"items": [{"id": item_id, "title": "Migration", "status": "done", "type": "decision", "linked_decision_id": "existing-id", "created_by": "varun"}]}
-        (board_dir / "board.json").write_text(json.dumps(board_data))
-
+        # No contradictions.jsonl — id won't be found
         with patch("smm_sync.dashboard.app._get_smm_dir", return_value=board_dir):
             response = client.post(f"/api/board/{item_id}/resolve", json={
                 "decision": "Already decided",

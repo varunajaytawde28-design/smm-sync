@@ -220,6 +220,27 @@ Add to your project's MCP config (e.g. .mcp.json or CLAUDE.md):
 """
 
 
+_MANDATORY_PROTOCOL = """\
+MANDATORY PROTOCOL — YOU MUST FOLLOW THESE RULES FOR THIS ENTIRE SESSION:
+
+1. EVERY time you choose between two or more alternatives (database, library, framework, auth pattern, API format, caching strategy, concurrency pattern), you MUST call the add_decision tool BEFORE writing the code. Not after. Before.
+
+2. add_decision requires: title (what you chose), description (why, and what you rejected), type (architectural/technical/product/constraint), confidence (0.0-1.0).
+
+3. If you write code without calling add_decision for the choice that led to that code, you are violating this project's governance protocol.
+
+4. AFTER completing your implementation, review every file you wrote. For each technical choice you made during coding (config patterns, test strategies, error handling approaches, dependency injection patterns, data seeding strategies), call add_decision retroactively. Implementation decisions matter as much as architectural ones.
+
+Example — you are about to use SQLAlchemy for ORM:
+→ FIRST call add_decision with title='SQLAlchemy 2.0 for ORM', description='Selected SQLAlchemy over Tortoise ORM and Django ORM for async support and mature ecosystem', type='technical', confidence=0.9
+→ THEN write the code
+
+This is not optional. This is a project requirement.\
+"""
+
+_MANDATORY_REMINDER = "--- REMINDER: Call add_decision for EVERY implementation choice this session. ---"
+
+
 @click.group()
 def main() -> None:
     """SMM-Sync — shared context for simultaneous AI agents."""
@@ -281,27 +302,23 @@ def init(ctx: click.Context, name: str, mode: str) -> None:
     _claude_dir = cwd / ".claude"
     _claude_dir.mkdir(exist_ok=True)
     _claude_settings_path = _claude_dir / "settings.json"
-    # Hook 1: allow get_project_context through immediately (must come first)
-    _allow_hook = {
-        "matcher": "mcp.*get_project_context",
-        "hooks": [
-            {
-                "type": "command",
-                "command": "bash -c 'exit 0'",
-            }
-        ],
-    }
-    # Hook 2: block ALL other tools until the lock file (created by get_project_context) exists
+    # Single hook: Claude Code runs ALL matching hooks, so we cannot use a separate
+    # allow-hook for get_project_context (it would still trigger the block hook too).
+    # Instead, read tool_name from stdin JSON; pass through get_project_context, else
+    # block until the lock file (created by get_project_context) exists.
     _block_hook = {
         "matcher": ".*",
         "hooks": [
             {
                 "type": "command",
                 "command": (
-                    "bash -c 'if [ ! -f /tmp/smm-session-$(printf \"%s\" \"$PWD\" | shasum | cut -c1-8).lock ];"
-                    " then echo \"\u26a0\ufe0f AXIOM HUB: You must call the get_project_context MCP tool"
-                    " before any action. This loads architectural decisions and checks for"
-                    " contradictions.\" >&2; exit 2; fi'"
+                    "bash -c 'INPUT=$(cat);"
+                    " if echo \"$INPUT\" | grep -q get_project_context; then exit 0; fi;"
+                    " RESOLVED=$(realpath \"$PWD\");"
+                    " LOCK=/tmp/smm-session-$(printf \"%s\" \"$RESOLVED\" | shasum | cut -c1-8).lock;"
+                    " FRESH=$(find \"$LOCK\" -mmin -30 2>/dev/null);"
+                    " if [ -z \"$FRESH\" ];"
+                    " then echo \"\u26a0\ufe0f AXIOM HUB: Call get_project_context first.\" >&2; exit 2; fi'"
                 ),
             }
         ],
@@ -333,8 +350,68 @@ def init(ctx: click.Context, name: str, mode: str) -> None:
             )
         )
     ]
-    # Prepend our two hooks so they run before any user-defined hooks
-    _settings["hooks"]["PreToolUse"] = [_allow_hook, _block_hook] + _remaining_hooks
+    # Prepend our hook so it runs before any user-defined hooks
+    _settings["hooks"]["PreToolUse"] = [_block_hook] + _remaining_hooks
+
+    # PostToolUse hook — gentle reminder to capture decisions after Write/Edit
+    _post_hook = {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+            {
+                "type": "command",
+                "command": (
+                    "bash -c 'echo \"[Axiom Hub] Did you make an architectural choice?"
+                    " If so, call add_decision before continuing.\" >&2; exit 0'"
+                ),
+            }
+        ],
+    }
+    if "PostToolUse" not in _settings["hooks"]:
+        _settings["hooks"]["PostToolUse"] = []
+    # Remove stale smm-managed PostToolUse hooks (Write/Edit reminder + Bash commit reset)
+    _post_remaining = [
+        h for h in _settings["hooks"]["PostToolUse"]
+        if not (
+            isinstance(h, dict)
+            and (
+                (
+                    h.get("matcher") == "Write|Edit|MultiEdit"
+                    and any(
+                        "Axiom Hub" in hk.get("command", "")
+                        for hk in h.get("hooks", [])
+                        if isinstance(hk, dict)
+                    )
+                )
+                or (
+                    h.get("matcher") == "Bash"
+                    and any(
+                        _SMM_SIG in hk.get("command", "")
+                        for hk in h.get("hooks", [])
+                        if isinstance(hk, dict)
+                    )
+                )
+            )
+        )
+    ]
+    # PostToolUse hook — session reset after git commit clears both lock files
+    _commit_hook = {
+        "matcher": "Bash",
+        "hooks": [
+            {
+                "type": "command",
+                "command": (
+                    "bash -c 'INPUT=$(cat);"
+                    " if echo \"$INPUT\" | grep -q \"git commit\"; then"
+                    " HASH=$(printf \"%s\" \"$PWD\" | shasum | cut -c1-8);"
+                    " rm -f /tmp/smm-session-$HASH.lock /tmp/smm-review-$HASH.lock;"
+                    " echo \"[Axiom Hub] Session complete. Next task will require fresh context load.\" >&2;"
+                    " fi;"
+                    " exit 0'"
+                ),
+            }
+        ],
+    }
+    _settings["hooks"]["PostToolUse"] = [_post_hook, _commit_hook] + _post_remaining
     _claude_settings_path.write_text(_json_poly.dumps(_settings, indent=2), encoding="utf-8")
 
     # B) .cursor/rules/axiom-hub.mdc — Cursor alwaysApply rule
@@ -370,7 +447,7 @@ def init(ctx: click.Context, name: str, mode: str) -> None:
             )
             if agent_choice in ("claude-code", "both"):
                 if configure_claude_code_hook():
-                    click.echo(click.style("  ✓ Claude Code PreToolUse hook configured.", fg="green"))
+                    click.echo(click.style("  ✓ Claude Code PreToolUse + PostToolUse hooks configured.", fg="green"))
                 else:
                     click.echo(click.style("  ⚠ Could not update ~/.claude/settings.json.", fg="yellow"))
             if agent_choice in ("cursor", "both"):
@@ -400,7 +477,7 @@ def init(ctx: click.Context, name: str, mode: str) -> None:
     # ── Final summary ─────────────────────────────────────────────────────────
     click.echo("")
     click.echo(click.style("✓ AGENTS.md generated (Cursor, Copilot, Devin, Codex — auto-read)", fg="green"))
-    click.echo(click.style("✓ .claude/settings.json generated (Claude Code — PreToolUse hook)", fg="green"))
+    click.echo(click.style("✓ .claude/settings.json generated (Claude Code — PreToolUse + PostToolUse hooks)", fg="green"))
     click.echo(click.style("✓ .cursor/rules/axiom-hub.mdc generated (Cursor — alwaysApply)", fg="green"))
     click.echo(click.style("✓ .agents/skills/axiom-caas/SKILL.md generated (Cline, Windsurf — universal)", fg="green"))
     if pre_commit_ok:
@@ -838,6 +915,8 @@ def get_context_cmd(project: str) -> None:
         f"{v} {k}" for k, v in sorted(type_counts.items())
     )
 
+    click.echo(_MANDATORY_PROTOCOL)
+    click.echo("")
     click.echo("---")
     click.echo(f"Project: {project}")
     click.echo(f"Decisions: {total} total ({type_summary})")
@@ -886,6 +965,8 @@ def get_context_cmd(project: str) -> None:
         click.echo("")
 
     click.echo("---")
+    click.echo("")
+    click.echo(_MANDATORY_REMINDER)
 
 
 def _server_running_on_port(port: int) -> bool:
@@ -1250,7 +1331,8 @@ def add_decisions_batch_cmd(source: str, project: str) -> None:
 @click.option("--all", "check_all", is_flag=True, default=False,
               help="Re-process all decisions, not just new ones.")
 @click.option("--project", default="smm-sync", help="Project name.")
-def check_cmd(check_all: bool, project: str) -> None:
+@click.option("--quiet", is_flag=True, default=False, help="Suppress output.")
+def check_cmd(check_all: bool, project: str, quiet: bool) -> None:
     """Sync new decisions from JSONL into Kuzu, detect contradictions, build edges.
 
     This is the ONLY command that loads heavy dependencies:
@@ -1313,13 +1395,14 @@ def check_cmd(check_all: bool, project: str) -> None:
                 new_decisions.append(d)  # include if timestamp unparseable
 
     if not new_decisions and not check_all:
-        click.echo(
-            click.style(
-                f"No new decisions since last check. "
-                f"{len(all_decisions)} total in JSONL.",
-                fg="cyan",
+        if not quiet:
+            click.echo(
+                click.style(
+                    f"No new decisions since last check. "
+                    f"{len(all_decisions)} total in JSONL.",
+                    fg="cyan",
+                )
             )
-        )
         return
 
     click.echo(
@@ -1408,12 +1491,39 @@ def check_cmd(check_all: bool, project: str) -> None:
                 import re as _re
                 import uuid as _uuid_mod
                 all_decisions_now = await client.get_decisions(project=project)
-                # Build all unique pairs explicitly
-                _all_pairs = [
-                    (all_decisions_now[_i], all_decisions_now[_j])
-                    for _i in range(len(all_decisions_now))
-                    for _j in range(_i + 1, len(all_decisions_now))
-                ]
+                # Build title→id map for reliable ID-based dedup
+                _title_to_id: dict[str, str] = {
+                    d.title.lower().strip(): d.id
+                    for d in all_decisions_now
+                    if d.title and d.id
+                }
+                # Build pairs: new×all when incremental, all×all when --all
+                _new_titles_set = {t.lower().strip() for t in all_new_titles}
+                if check_all:
+                    _all_pairs = [
+                        (all_decisions_now[_i], all_decisions_now[_j])
+                        for _i in range(len(all_decisions_now))
+                        for _j in range(_i + 1, len(all_decisions_now))
+                    ]
+                else:
+                    # Each new decision paired with every other decision (old or new).
+                    # Use sorted-key dedup so (A,B) and (B,A) aren't both included
+                    # when two new decisions are paired with each other.
+                    _seen_incremental: set[tuple] = set()
+                    _all_pairs = []
+                    for _d_new in all_decisions_now:
+                        if not (_d_new.title and _d_new.title.lower().strip() in _new_titles_set):
+                            continue
+                        for _d_other in all_decisions_now:
+                            if _d_other is _d_new:
+                                continue
+                            _pkey = tuple(sorted([
+                                _d_new.id or _d_new.title or "",
+                                _d_other.id or _d_other.title or "",
+                            ]))
+                            if _pkey not in _seen_incremental:
+                                _seen_incremental.add(_pkey)
+                                _all_pairs.append((_d_new, _d_other))
                 # Strip CLAUDECODE env vars for nested session safety
                 _safe_env = os.environ.copy()
                 for _var in [
@@ -1428,6 +1538,8 @@ def check_cmd(check_all: bool, project: str) -> None:
                 # Load existing pair keys to skip reversed duplicates,
                 # and collect superseded/loser decision titles to skip noise.
                 _cli_seen_keys: set[tuple] = set()
+                _cli_seen_id_pairs: set[tuple] = set()
+                _cli_pair_counts: dict[tuple, int] = {}
                 _cli_superseded_titles: set[str] = set()
                 try:
                     if contra_path.exists():
@@ -1436,10 +1548,17 @@ def check_cmd(check_all: bool, project: str) -> None:
                             if _ln:
                                 try:
                                     _ex = _json.loads(_ln)
-                                    _da = (_ex.get("decision_a", "") or "").lower().strip()
-                                    _db = (_ex.get("decision_b", "") or "").lower().strip()
+                                    _da = (_ex.get("decision_a", "") or "").lower().strip()[:50]
+                                    _db = (_ex.get("decision_b", "") or "").lower().strip()[:50]
                                     if _da and _db:
-                                        _cli_seen_keys.add(tuple(sorted([_da, _db])))
+                                        _pk_ex = tuple(sorted([_da, _db]))
+                                        _cli_seen_keys.add(_pk_ex)
+                                        _cli_pair_counts[_pk_ex] = _cli_pair_counts.get(_pk_ex, 0) + 1
+                                    # Also index by decision IDs when available
+                                    _ex_aid = (_ex.get("decision_a_id") or "").strip()
+                                    _ex_bid = (_ex.get("decision_b_id") or "").strip()
+                                    if _ex_aid and _ex_bid:
+                                        _cli_seen_id_pairs.add(tuple(sorted([_ex_aid, _ex_bid])))
                                     # Track superseded (losing) decisions from resolved contradictions
                                     _is_resolved = (
                                         _ex.get("resolved", False)
@@ -1493,8 +1612,14 @@ def check_cmd(check_all: bool, project: str) -> None:
                         _b_text = f"{_d_b.title}: {((_d_b.rationale or _d_b.content or '').strip()[:120])}"
                         _pair_lines.append(f'Pair {_pi + 1}: A="{_a_text}" B="{_b_text}"')
                     _prompt = (
-                        "Do any of these decision pairs directly contradict each other "
-                        "(e.g. conflicting tech choices, opposing strategies)?\n"
+                        "Analyze these decision pairs. Two decisions CONTRADICT if they specify "
+                        "mutually exclusive approaches for the same architectural concern. Flag a contradiction if:\n"
+                        "- They choose different databases for the same purpose (e.g. SQLite vs PostgreSQL)\n"
+                        "- They choose different auth mechanisms (e.g. API Key vs JWT)\n"
+                        "- They choose different frameworks, libraries, or patterns for the same concern\n"
+                        "- One explicitly reverts, replaces, or undoes the other\n\n"
+                        "A revert IS a contradiction — it means the team changed direction and both cannot be true simultaneously.\n\n"
+                        "Do NOT flag pairs that are merely related or complementary.\n\n"
                         + "\n".join(_pair_lines)
                         + "\n\nOutput JSON array only: "
                         '[{"decision_a":"<title>","decision_b":"<title>","reason":"<brief>"}]. '
@@ -1521,8 +1646,26 @@ def check_cmd(check_all: bool, project: str) -> None:
                                     _db_t = _c.get("decision_b", "")
                                     if _da_t.lower().strip() == _db_t.lower().strip():
                                         continue
-                                    _pk = tuple(sorted([_da_t.lower().strip(), _db_t.lower().strip()]))
+                                    _da_50 = _da_t.lower().strip()[:50]
+                                    _db_50 = _db_t.lower().strip()[:50]
+                                    _pk = tuple(sorted([_da_50, _db_50]))
+                                    # Primary dedup: use decision IDs when available
+                                    _da_id = _title_to_id.get(_da_t.lower().strip(), "")
+                                    _db_id = _title_to_id.get(_db_t.lower().strip(), "")
+                                    _id_pair = tuple(sorted([_da_id, _db_id])) if _da_id and _db_id else None
+                                    if _id_pair and _id_pair in _cli_seen_id_pairs:
+                                        continue
                                     if _pk in _cli_seen_keys:
+                                        if _cli_pair_counts.get(_pk, 0) > 2:
+                                            click.echo(
+                                                click.style(
+                                                    f"  [dedup] Skipping duplicate "
+                                                    f"(count={_cli_pair_counts[_pk]}): "
+                                                    f"{_da_50!r:.40}",
+                                                    fg="yellow",
+                                                ),
+                                                err=True,
+                                            )
                                         continue
                                     # Skip if either decision is already superseded
                                     if (
@@ -1530,11 +1673,15 @@ def check_cmd(check_all: bool, project: str) -> None:
                                         or _db_t.lower().strip() in _cli_superseded_titles
                                     ):
                                         continue
+                                    if _id_pair:
+                                        _cli_seen_id_pairs.add(_id_pair)
                                     _cli_seen_keys.add(_pk)
                                     _entry = {
                                         "id": str(_uuid_mod.uuid4()),
                                         "decision_a": _da_t,
                                         "decision_b": _db_t,
+                                        "decision_a_id": _da_id,
+                                        "decision_b_id": _db_id,
                                         "reason": _c.get("reason", ""),
                                         "detected_at": now_ts,
                                         "resolved": False,
@@ -1622,14 +1769,18 @@ def check_cmd(check_all: bool, project: str) -> None:
 
     try:
         synced, contra_count = _asyncio.run(_run_check())
-        click.echo(
-            click.style(
-                f"Checked {synced} new decision(s) against "
-                f"{len(all_decisions) - len(new_decisions)} existing. "
-                f"Found {contra_count} contradiction(s).",
-                fg="green",
+        # Write dirty flag so pre-commit hook knows to run smm compile
+        if synced > 0 or contra_count > 0:
+            (smm_dir / ".check_dirty").write_text("", encoding="utf-8")
+        if not quiet:
+            click.echo(
+                click.style(
+                    f"Checked {synced} new decision(s) against "
+                    f"{len(all_decisions) - len(new_decisions)} existing. "
+                    f"Found {contra_count} contradiction(s).",
+                    fg="green",
+                )
             )
-        )
     except Exception as exc:
         click.echo(click.style(f"smm check failed: {exc}", fg="red"), err=True)
         sys.exit(1)
@@ -2382,6 +2533,74 @@ def compliance_stats() -> None:
             click.echo(f"  {i}. {item['title'][:60]} (surfaced {item['count']} times)")
 
 
+@main.command("dedupe")
+@click.option("--project", default="smm-sync", help="Project name (unused, for consistency).")
+def dedupe_cmd(project: str) -> None:
+    """Remove duplicate contradiction pairs from contradictions.jsonl.
+
+    Keeps the first entry for each unique pair of decision IDs (or titles as
+    fallback). Use this to clean up duplicates created before the ID-based
+    dedup fix was applied.
+
+    Example:
+
+        smm dedupe
+    """
+    import json as _json_dedupe
+
+    smm_dir = get_smm_dir()
+    if not smm_dir or not smm_dir.exists():
+        click.echo(click.style("No .smm/ directory found. Run `smm init` first.", fg="red"))
+        return
+
+    contra_path = smm_dir / "contradictions.jsonl"
+    if not contra_path.exists():
+        click.echo("No contradictions.jsonl found — nothing to deduplicate.")
+        return
+
+    raw_lines = [ln for ln in contra_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    seen_id_pairs: set[tuple] = set()
+    seen_title_pairs: set[tuple] = set()
+    kept: list[str] = []
+    removed = 0
+
+    for line in raw_lines:
+        try:
+            entry = _json_dedupe.loads(line)
+        except Exception:
+            kept.append(line)
+            continue
+
+        a_id = (entry.get("decision_a_id") or "").strip()
+        b_id = (entry.get("decision_b_id") or "").strip()
+        a_t = (entry.get("decision_a") or "").lower().strip()[:50]
+        b_t = (entry.get("decision_b") or "").lower().strip()[:50]
+
+        if a_id and b_id:
+            id_pair = tuple(sorted([a_id, b_id]))
+            if id_pair in seen_id_pairs:
+                removed += 1
+                continue
+            seen_id_pairs.add(id_pair)
+            # Also register title pair to prevent future title-based dupes
+            if a_t and b_t:
+                seen_title_pairs.add(tuple(sorted([a_t, b_t])))
+        elif a_t and b_t:
+            title_pair = tuple(sorted([a_t, b_t]))
+            if title_pair in seen_title_pairs:
+                removed += 1
+                continue
+            seen_title_pairs.add(title_pair)
+
+        kept.append(line)
+
+    contra_path.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+    if removed:
+        click.echo(click.style(f"Removed {removed} duplicate(s), kept {len(kept)} contradiction(s).", fg="green"))
+    else:
+        click.echo(f"No duplicates found. {len(kept)} contradiction(s) kept.")
+
+
 @main.command("reset")
 @click.option(
     "--confirm",
@@ -2646,6 +2865,52 @@ def dashboard(host: str, port: int) -> None:
             time.sleep(1.2)
             webbrowser.open(f"http://{host}:{port}")
         threading.Thread(target=_open, daemon=True).start()
+
+    # Spawn background smm check only if there are new decisions since last check
+    try:
+        import json as _jdash
+        import threading as _tdash
+        import subprocess as _sdash
+        from datetime import datetime as _dtdash, timezone as _tzdash
+
+        _dec_path = smm_dir / "decisions.jsonl"
+        _lct_path = smm_dir / "last_check_timestamp.txt"
+        _last_check_ts_dash = None
+        if _lct_path.exists():
+            try:
+                _lct_str = _lct_path.read_text(encoding="utf-8").strip()
+                _last_check_ts_dash = _dtdash.fromisoformat(_lct_str)
+            except Exception:
+                pass
+        _new_since_check = 0
+        if _dec_path.exists():
+            for _ln in _dec_path.read_text(encoding="utf-8").splitlines():
+                _ln = _ln.strip()
+                if not _ln:
+                    continue
+                try:
+                    _d = _jdash.loads(_ln)
+                    if _last_check_ts_dash is None:
+                        _new_since_check += 1
+                    else:
+                        _ts_str = _d.get("timestamp", "")
+                        if _ts_str:
+                            _ts = _dtdash.fromisoformat(_ts_str.replace("Z", "+00:00"))
+                            if _ts > _last_check_ts_dash:
+                                _new_since_check += 1
+                        else:
+                            _new_since_check += 1
+                except Exception:
+                    pass
+        if _new_since_check > 0:
+            def _bg_check():
+                try:
+                    _sdash.run(["smm", "check", "--quiet"], capture_output=True, timeout=120)
+                except Exception:
+                    pass
+            _tdash.Thread(target=_bg_check, daemon=True).start()
+    except Exception:
+        pass
 
     run_dashboard(host=host, port=port)
 

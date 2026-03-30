@@ -8,9 +8,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.26.0/cytoscape.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
 <style>
   :root {
     --bg:#fafaf8;--surface:#ffffff;--surface-2:#f4f4f0;
@@ -23,6 +23,12 @@
     --purple:#7c3aed;--purple-light:#f5f3ff;--purple-border:#ddd6fe;
     --serif:'Instrument Serif',Georgia,serif;
     --sans:'Geist',system-ui,sans-serif;
+    /* Graph theming */
+    --compound-bg:#E2E8F0;--compound-border:#CBD5E0;
+    --node-active-border:#2B6CB0;--node-active-bg:#FFFFFF;
+    --node-super-border:#A0AEC0;--node-super-bg:#EDF2F7;
+    --edge-super:#4A5568;--edge-relates:#A0AEC0;--edge-contradicts:#E53E3E;
+    --text-main:#2D3748;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:100vh;display:flex;font-size:14px;overflow:hidden}
@@ -72,16 +78,22 @@
   .graph-btn{width:28px;height:28px;border-radius:5px;background:var(--surface);border:1px solid var(--border);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);transition:all .1s}
   .graph-btn:hover{background:var(--surface-2);color:var(--text)}
 
-  /* Legend */
-  .graph-legend{position:absolute;bottom:14px;left:14px;background:var(--surface);border:1px solid var(--border);border-radius:7px;padding:8px 12px;font-size:10px;color:var(--text-muted);z-index:10;min-width:148px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+  /* Legend – collapsible */
+  .graph-legend{position:absolute;bottom:14px;left:14px;background:var(--surface);border:1px solid var(--border);border-radius:7px;padding:8px 12px;font-size:10px;color:var(--text-muted);z-index:10;min-width:148px;box-shadow:0 2px 8px rgba(0,0,0,.06);user-select:none}
+  .legend-header{display:flex;align-items:center;justify-content:space-between;cursor:pointer;margin-bottom:0}
+  .legend-header:hover{color:var(--text)}
+  .legend-body{margin-top:7px}
   .legend-section{margin-bottom:7px}
   .legend-section:last-child{margin-bottom:0}
   .legend-heading{font-size:9px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--text-dim);margin-bottom:4px}
   .legend-item{display:flex;align-items:center;gap:6px;margin-bottom:3px;line-height:1.3}
   .legend-item:last-child{margin-bottom:0}
   .legend-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+  .legend-node-active{width:12px;height:12px;border-radius:2px;border:2px solid #2B6CB0;background:#fff;flex-shrink:0}
+  .legend-node-super{width:12px;height:12px;border-radius:2px;border:2px dashed #A0AEC0;background:#EDF2F7;flex-shrink:0;opacity:.8}
   .legend-line{width:18px;height:2px;flex-shrink:0;border-radius:1px}
-  .legend-line-dashed{width:18px;height:0;border-top:2px dashed #9ca3af;flex-shrink:0}
+  .legend-line-fat{width:18px;height:3px;flex-shrink:0;border-radius:1px}
+  .legend-line-dashed{width:18px;height:0;border-top:2px dashed #A0AEC0;flex-shrink:0}
 
   /* Node detail panel */
   .detail-panel{position:absolute;top:10px;left:14px;width:276px;background:var(--surface);border:1px solid var(--border);border-radius:9px;box-shadow:0 8px 28px rgba(0,0,0,.10);display:none;z-index:20}
@@ -98,28 +110,27 @@
   .dp-text{font-size:11px;color:var(--text-mid);line-height:1.6}
   .dp-footer{padding:8px 12px;border-top:1px solid var(--border);display:flex;gap:5px}
   .tag{display:inline-flex;align-items:center;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:500;border:1px solid transparent}
-  .tag-architectural{background:var(--accent-light);color:var(--accent);border-color:var(--accent-border)}
-  .tag-technical{background:#f0fdf4;color:#16a34a;border-color:#bbf7d0}
-  .tag-product{background:var(--purple-light);color:var(--purple);border-color:var(--purple-border)}
-  .tag-constraint{background:var(--amber-light);color:var(--amber);border-color:var(--amber-border)}
+  .tag-architectural{background:#faf5ff;color:#9F7AEA;border-color:#e9d8fd}
+  .tag-technical{background:#f0fff4;color:#48BB78;border-color:#c6f6d5}
+  .tag-product{background:#ebf8ff;color:#4299E1;border-color:#bee3f8}
+  .tag-constraint{background:#fffaf0;color:#ED8936;border-color:#fbd38d}
   .tag-superseded{background:var(--surface-2);color:var(--text-dim);border-color:var(--border)}
   .conf-pill{font-size:10px;font-weight:600;padding:2px 6px;border-radius:20px}
   .conf-high{background:var(--green-light);color:var(--green);border:1px solid var(--green-border)}
   .conf-mid{background:var(--amber-light);color:var(--amber);border:1px solid var(--amber-border)}
   .conf-low{background:var(--red-light);color:var(--red);border:1px solid var(--red-border)}
 
-  /* Sprint header overlay */
-  #sprint-header{display:none;position:absolute;top:0;left:0;right:0;height:26px;overflow:hidden;pointer-events:none;z-index:5}
-  .sprint-label{position:absolute;font-size:9px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;color:var(--text-dim);background:var(--surface-2);border-right:1px solid var(--border);padding:0 6px;height:26px;display:flex;align-items:center;white-space:nowrap}
-
   /* Toast */
   .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--text);color:white;padding:10px 18px;border-radius:8px;font-size:12px;opacity:0;transition:all .3s;z-index:1000;pointer-events:none}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 
   /* Node hover tooltip */
-  #node-tooltip{position:fixed;z-index:200;background:#1c1a17;color:#f5f5f0;border-radius:7px;padding:9px 12px;font-size:11px;max-width:280px;pointer-events:none;box-shadow:0 6px 20px rgba(0,0,0,.28);line-height:1.5;display:none}
-  #node-tooltip strong{display:block;margin-bottom:4px;font-size:12px;color:#ffffff}
-  #node-tooltip span{color:#a8a29e;font-size:10px}
+  #node-tooltip{position:fixed;z-index:200;background:#1c1a17;color:#f5f5f0;border-radius:7px;padding:9px 12px;font-size:11px;max-width:300px;pointer-events:none;box-shadow:0 6px 20px rgba(0,0,0,.28);line-height:1.5;display:none}
+  #node-tooltip strong{display:block;margin-bottom:5px;font-size:12px;color:#ffffff}
+  #node-tooltip .tt-meta{display:flex;align-items:center;gap:6px;margin-bottom:5px}
+  #node-tooltip .tt-badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:600;color:#fff}
+  #node-tooltip .tt-conf{color:#a8a29e;font-size:10px}
+  #node-tooltip .tt-rationale{color:#c4bfb9;font-size:10px;line-height:1.5}
   ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--border-dark);border-radius:10px}
 
   /* Empty state */
@@ -183,15 +194,13 @@
     <div class="topbar-title">⬡ Decision Graph</div>
     <a href="/" class="btn btn-ghost btn-sm">← Dashboard</a>
     <div class="view-toggle">
-      <button class="view-btn active" id="vbtn-contradictions" onclick="switchView('contradictions')">Contradictions</button>
-      <button class="view-btn" id="vbtn-all" onclick="switchView('all')">All Decisions</button>
-      <button class="view-btn" id="vbtn-sprints" onclick="switchView('sprints')">Sprint Timeline</button>
+      <button class="view-btn active" id="vbtn-all" onclick="switchView('all')">All Decisions</button>
+      <button class="view-btn" id="vbtn-contradictions" onclick="switchView('contradictions')">Contradictions</button>
     </div>
   </div>
 
   <div class="graph-wrap">
     <div id="cy"></div>
-    <div id="sprint-header"></div>
     <div id="node-tooltip"></div>
 
     <div id="graph-stats">loading…</div>
@@ -248,36 +257,45 @@
       </div>
     </div>
 
-    <!-- Legend -->
-    <div class="graph-legend">
-      <div class="legend-section">
-        <div class="legend-heading">Node type</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#3B82F6"></div>Architectural</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#10B981"></div>Technical</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#8B5CF6"></div>Product</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#F59E0B"></div>Constraint</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#9CA3AF;opacity:.5"></div><span style="opacity:.6;text-decoration:line-through">Superseded</span></div>
+    <!-- Collapsible Legend -->
+    <div class="graph-legend" id="graph-legend">
+      <div class="legend-header" id="legend-toggle">
+        <span style="font-size:9px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--text-dim)">Legend</span>
+        <span id="legend-arrow" style="font-size:9px;color:var(--text-dim);margin-left:8px">▼</span>
       </div>
-      <div class="legend-section" style="border-top:1px solid var(--border);padding-top:7px">
-        <div class="legend-heading">Edge type</div>
-        <div class="legend-item"><div class="legend-line" style="background:#3B82F6"></div>Supersedes</div>
-        <div class="legend-item"><div class="legend-line" style="background:#EF4444"></div>Contradicts</div>
-        <div class="legend-item"><div class="legend-line-dashed"></div>Relates to</div>
+      <div class="legend-body" id="legend-body">
+        <div class="legend-section" style="margin-top:6px">
+          <div class="legend-heading">Nodes</div>
+          <div class="legend-item"><div class="legend-node-active"></div>Active</div>
+          <div class="legend-item"><div class="legend-node-super"></div>Superseded</div>
+        </div>
+        <div class="legend-section" style="border-top:1px solid var(--border);padding-top:7px">
+          <div class="legend-heading">Edges</div>
+          <div class="legend-item"><div class="legend-line" style="background:#4A5568"></div>Supersedes</div>
+          <div class="legend-item"><div class="legend-line-fat" style="background:#E53E3E"></div>Contradicts</div>
+          <div class="legend-item"><div class="legend-line-dashed"></div>Relates to</div>
+        </div>
+        <div class="legend-section" style="border-top:1px solid var(--border);padding-top:7px">
+          <div class="legend-heading">Type badges</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#9F7AEA"></div>Architectural</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#48BB78"></div>Technical</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#4299E1"></div>Product</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#ED8936"></div>Constraint</div>
+        </div>
       </div>
     </div>
   </div>
 </main>
 
 <script>
-// ── State ────────────────────────────────────────────────────────────────────
+// ── State ─────────────────────────────────────────────────────────────────────
 let allNodes = [];
 let allEdges = [];
-let edgeLookup = {};   // source+target → explanation (from contradictions data)
 let cy = null;
 let selectedNodeData = null;
-let currentView = 'contradictions';
+let currentView = 'all';
 let REPO_OWNER = '';
-let REPO_NAME = '';
+let REPO_NAME  = '';
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function showToast(msg) {
@@ -286,14 +304,15 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove('show'), 2800);
 }
 
-const TYPE_COLORS = {
-  architectural: '#3B82F6',
-  technical:     '#10B981',
-  product:       '#8B5CF6',
-  constraint:    '#F59E0B',
-  superseded:    '#9CA3AF',
-};
+function truncate(s, n) {
+  return (s || '').length > n ? s.slice(0, n - 1) + '…' : (s || '');
+}
 
+function escHtml(v) {
+  return String(v || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Type normalization ────────────────────────────────────────────────────────
 const TYPE_NORM = {
   architectural:'architectural', infrastructure:'architectural', architecture:'architectural', deployment:'architectural',
   technical:'technical', 'data-storage':'technical', data_storage:'technical', database:'technical',
@@ -307,170 +326,145 @@ function normalizeType(t) {
   return TYPE_NORM[(t || '').toLowerCase().trim()] || 'technical';
 }
 
-function truncate(s, n) {
-  return (s || '').length > n ? s.slice(0, n - 1) + '…' : (s || '');
+function normalizeEdgeType(t) {
+  const s = (t || '').toLowerCase();
+  if (s.includes('contra')) return 'contradicts';
+  if (s.includes('super'))  return 'supersedes';
+  if (s.includes('dismiss')) return 'dismissed';
+  return 'relates';
 }
 
-function escHtml(v) {
-  return String(v || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-// ── Domain classification for contradiction view ──────────────────────────────
-const DOMAIN_RULES = [
-  { name: 'DATABASE & STORAGE',         keys: ['database','postgres','sqlite','oracle','dynamo','redis','duckdb','storage','dba','sql ','mongodb','cassandra','mysql','elasticsearch','db migration','schema'] },
-  { name: 'ARCHITECTURE & PATTERNS',    keys: ['monolith','microservice','graphql','grpc','rest api','monorepo','event sourcing','kafka','rabbitmq','cqrs','service mesh','message','api gateway','decompos'] },
-  { name: 'INFRASTRUCTURE & DEPLOY',    keys: ['kubernetes','docker','ecs','lambda','aws','cloud','terraform','deploy','k8s','fargate','ec2','s3','azure','gcp','serverless','container','helm','ci/cd','pipeline','jenkins'] },
-  { name: 'AUTH & SECURITY',            keys: ['auth','jwt','api key','oauth','cognito','saml','mfa','login','session','token','sso','ldap','tls','ssl','certificate','rbac','identity','secret'] },
-  { name: 'MONITORING & OBSERVABILITY', keys: ['datadog','prometheus','opentelemetry','grafana','monitoring','observ','metric','logging','tracing','alert','pagerduty','splunk','elk','kibana','apm'] },
+// ── Category definitions (compound swim-lanes) ────────────────────────────────
+const CATEGORIES = [
+  { id: 'db-storage',    label: 'Database & Storage',
+    keys: ['database','postgres','sqlite','mysql','mongodb','dynamodb','redis','duckdb','storage','schema','migration','sql','nosql','cassandra','elasticsearch','clickhouse','dba'] },
+  { id: 'auth-security', label: 'Auth & Security',
+    keys: ['auth','jwt','oauth','token','session','login','password','secret','rbac','identity','mfa','sso','api key','tls','ssl','cert','encryption','security','acl','permission','authorization'] },
+  { id: 'api-transport', label: 'API & Transport',
+    keys: ['api','rest','graphql','grpc','http','websocket','transport','endpoint','route','protocol','openapi','swagger','webhook','rpc'] },
+  { id: 'bg-processing', label: 'Background Processing',
+    keys: ['queue','worker','celery','kafka','rabbitmq','background','async','job','task','schedule','cron','event','message','stream','pub/sub','pubsub','broker'] },
+  { id: 'monitoring',    label: 'Monitoring & Observability',
+    keys: ['monitor','observ','metric','log','trace','alert','prometheus','grafana','datadog','opentelemetry','pagerduty','apm','elk','kibana','splunk','logging'] },
+  { id: 'testing-infra', label: 'Testing & Infrastructure',
+    keys: ['test','deploy','ci','cd','pipeline','docker','kubernetes','k8s','terraform','infrastructure','staging','production','build','container','helm','jenkins'] },
+  { id: 'caching-perf',  label: 'Caching & Performance',
+    keys: ['cache','cdn','performance','memcache','optimize','speed','latency','throughput','ttl','invalidat','compress','index','materialized'] },
 ];
 
-function classifyPairDomain(labelA, labelB) {
-  const text = (labelA + ' ' + labelB).toLowerCase();
-  for (const rule of DOMAIN_RULES) {
-    if (rule.keys.some(k => text.includes(k))) return rule.name;
+function classifyDecision(label, type, rationale) {
+  const text = ((label || '') + ' ' + (type || '') + ' ' + (rationale || '')).toLowerCase();
+  for (const cat of CATEGORIES) {
+    if (cat.keys.some(k => text.includes(k))) return cat.id;
   }
-  return 'OTHER';
+  return 'testing-infra';
 }
 
-// ── Contradiction view: preset layout with domain clusters ────────────────────
-function computeContradictionPositions(nodes, edges) {
-  const DOMAIN_ORDER = [
-    'DATABASE & STORAGE',
-    'ARCHITECTURE & PATTERNS',
-    'INFRASTRUCTURE & DEPLOY',
-    'AUTH & SECURITY',
-    'MONITORING & OBSERVABILITY',
-    'OTHER',
-  ];
+// ── Type badge colors ─────────────────────────────────────────────────────────
+const TYPE_BADGE = {
+  architectural: { bg: '#9F7AEA', label: 'Architectural' },
+  technical:     { bg: '#48BB78', label: 'Technical' },
+  product:       { bg: '#4299E1', label: 'Product' },
+  constraint:    { bg: '#ED8936', label: 'Constraint' },
+};
 
-  const nodeById = {};
-  nodes.forEach(n => { nodeById[String(n.id)] = n; });
-
-  // Classify each edge into a domain group
-  const groups = {};
-  DOMAIN_ORDER.forEach(d => { groups[d] = []; });
-
-  edges.forEach(e => {
-    const src = nodeById[String(e.source)];
-    const tgt = nodeById[String(e.target)];
-    const domain = classifyPairDomain(src ? src.label : '', tgt ? tgt.label : '');
-    groups[domain].push({ source: String(e.source), target: String(e.target), type: e.type || 'related' });
-  });
-
-  // Layout constants
-  const LEFT_X  = 180;   // center of winner/left column
-  const RIGHT_X = 520;   // center of loser/right column
-  const LBL_X   = 18;    // section label left-aligned x
-  const ROW_H   = 100;   // vertical gap between pairs in a section
-  const SEC_TOP = 36;    // gap from section label to first pair
-  const SEC_BOT = 56;    // gap from last pair to next section label
-  let   curY    = 50;
-
-  const positions    = {};  // nodeId → {x, y}
-  const positionedIds = new Set();
-  const sectionLabels = []; // {id, label, x, y}
-
-  for (const domainName of DOMAIN_ORDER) {
-    const pairs = groups[domainName];
-    if (!pairs.length) continue;
-
-    const lblId = 'sect-' + domainName.replace(/\W+/g, '');
-    sectionLabels.push({ id: lblId, label: domainName, x: LBL_X, y: curY });
-    curY += SEC_TOP;
-
-    for (const pair of pairs) {
-      // Only assign position if not already placed from a prior pair
-      if (!positionedIds.has(pair.source)) {
-        positions[pair.source] = { x: LEFT_X, y: curY };
-        positionedIds.add(pair.source);
-      }
-      if (!positionedIds.has(pair.target)) {
-        positions[pair.target] = { x: RIGHT_X, y: curY };
-        positionedIds.add(pair.target);
-      }
-      curY += ROW_H;
-    }
-    curY += SEC_BOT;
-  }
-
-  // Any leftover connected nodes not yet placed (e.g. from multi-pair nodes)
-  nodes.forEach(n => {
-    if (!positionedIds.has(String(n.id))) {
-      positions[String(n.id)] = { x: LEFT_X, y: curY };
-      curY += ROW_H;
-    }
-  });
-
-  return { positions, sectionLabels };
-}
-
-// ── Cytoscape style sheet ─────────────────────────────────────────────────────
+// ── Cytoscape stylesheet ──────────────────────────────────────────────────────
 const CY_STYLES = [
+  // Base node
   { selector: 'node', style: {
-      'background-color': 'data(color)',
-      'shape':      'data(shape)',
-      'width':      'data(w)',
-      'height':     'data(h)',
-      'label':      'data(label)',
-      'text-wrap':  'wrap', 'text-max-width': 'data(textMaxW)',
-      'font-family': 'Geist,system-ui,sans-serif',
-      'font-size':  'data(fontSize)', 'font-weight': '500',
-      'color': '#ffffff', 'text-outline-color': 'data(color)', 'text-outline-width': 2,
-      'text-valign': 'center', 'text-halign': 'center',
-      'border-width': 0, 'cursor': 'pointer',
+    'background-color': '#FFFFFF',
+    'border-width': 2,
+    'border-color': '#2B6CB0',
+    'shape': 'round-rectangle',
+    'width': 'data(nodeW)',
+    'height': 'data(nodeH)',
+    'label': 'data(label)',
+    'text-wrap': 'wrap',
+    'text-max-width': '120px',
+    'font-family': 'Geist,system-ui,sans-serif',
+    'font-size': '10px',
+    'font-weight': '500',
+    'color': '#2D3748',
+    'text-outline-width': 0,
+    'text-valign': 'center',
+    'text-halign': 'center',
+    'cursor': 'pointer',
   }},
-  // Type overrides
-  { selector: 'node[type="architectural"]', style: { 'background-color': '#3B82F6' }},
-  { selector: 'node[type="technical"]',     style: { 'background-color': '#10B981' }},
-  { selector: 'node[type="product"]',       style: { 'background-color': '#8B5CF6' }},
-  { selector: 'node[type="constraint"]',    style: { 'background-color': '#F59E0B' }},
-  { selector: 'node[type="superseded"]',    style: {
-      'background-color': '#9CA3AF', 'opacity': 0.45,
-      'font-style': 'italic',
+  // Superseded nodes
+  { selector: 'node[status="superseded"]', style: {
+    'background-color': '#EDF2F7',
+    'border-style': 'dashed',
+    'border-color': '#A0AEC0',
+    'opacity': 0.8,
+    'color': '#718096',
+    'font-style': 'italic',
   }},
-  // Section label nodes (contradiction view domain headers)
-  { selector: 'node.section-label', style: {
-      'background-opacity': 0,
-      'border-width': 0,
-      'color': '#78716c',
-      'font-size': '10px', 'font-weight': '700',
-      'text-outline-width': 0,
-      'text-valign': 'center', 'text-halign': 'left',
-      'events': 'no',
-  }},
-  // Sprint label ghost nodes
-  { selector: 'node.sprint-label', style: {
-      'background-opacity': 0.06, 'background-color': '#e0e0e0',
-      'border-width': 1, 'border-color': '#e0e0e0',
-      'color': '#9ca3af', 'font-size': '9px', 'font-weight': '700',
-      'text-outline-width': 0,
-      'events': 'no',
+  // Compound parent nodes (swim-lanes)
+  { selector: ':parent', style: {
+    'background-color': '#E2E8F0',
+    'background-opacity': 0.6,
+    'border-width': 1,
+    'border-style': 'dashed',
+    'border-color': '#CBD5E0',
+    'label': 'data(label)',
+    'text-valign': 'top',
+    'text-halign': 'center',
+    'font-size': '10px',
+    'font-weight': '600',
+    'color': '#4A5568',
+    'text-outline-width': 0,
+    'text-margin-y': 8,
+    'padding': '24px',
+    'shape': 'round-rectangle',
+    'cursor': 'default',
   }},
   // Interactions
-  { selector: 'node:selected',   style: { 'border-width': 3, 'border-color': '#ffffff', 'opacity': 1 }},
-  { selector: 'node.hovered',    style: { 'border-width': 2, 'border-color': '#ffffff' }},
-  { selector: 'node.dimmed',     style: { 'opacity': 0.12 }},
-  // Edges
+  { selector: 'node:selected', style: { 'border-width': 3, 'border-color': '#2B6CB0', 'border-style': 'solid', 'background-color': '#EBF8FF' }},
+  { selector: 'node.hovered',  style: { 'border-width': 3 }},
+  { selector: 'node.dimmed',   style: { 'opacity': 0.15 }},
+  // Edges — base
   { selector: 'edge', style: {
-      'width': 1.5, 'line-color': '#cbd5e1',
-      'target-arrow-color': '#cbd5e1', 'target-arrow-shape': 'triangle',
-      'curve-style': 'bezier', 'arrow-scale': 0.7,
+    'width': 1.5,
+    'line-color': '#A0AEC0',
+    'target-arrow-color': '#A0AEC0',
+    'target-arrow-shape': 'none',
+    'source-arrow-shape': 'none',
+    'curve-style': 'bezier',
+    'arrow-scale': 0.8,
   }},
+  // Supersedes: solid 3px gray, triangle arrowhead
   { selector: 'edge[type="supersedes"]', style: {
-      'width': 2, 'line-color': '#3B82F6',
-      'target-arrow-color': '#3B82F6', 'line-style': 'solid', 'target-arrow-shape': 'triangle',
+    'width': 3,
+    'line-color': '#4A5568',
+    'target-arrow-color': '#4A5568',
+    'line-style': 'solid',
+    'target-arrow-shape': 'triangle',
   }},
+  // Contradicts: solid 4px red, no arrowhead (bidirectional)
   { selector: 'edge[type="contradicts"]', style: {
-      'width': 2.5, 'line-color': '#EF4444',
-      'target-arrow-color': '#EF4444', 'line-style': 'solid', 'target-arrow-shape': 'none',
-      'source-arrow-shape': 'none',
+    'width': 4,
+    'line-color': '#E53E3E',
+    'target-arrow-shape': 'none',
+    'source-arrow-shape': 'none',
+    'line-style': 'solid',
   }},
-  { selector: 'edge[type="related"]', style: {
-      'line-style': 'dashed', 'line-color': '#9ca3af',
-      'target-arrow-shape': 'none', 'width': 1,
+  // Relates-to: dashed 2px light gray
+  { selector: 'edge[type="relates"]', style: {
+    'width': 2,
+    'line-style': 'dashed',
+    'line-color': '#A0AEC0',
+    'target-arrow-shape': 'none',
   }},
-  { selector: 'edge.dimmed', style: { 'opacity': 0.06 }},
-  { selector: 'edge.highlighted', style: { 'width': 3, 'opacity': 1 }},
+  // Dismissed
+  { selector: 'edge[type="dismissed"]', style: {
+    'line-style': 'dashed',
+    'line-color': '#CBD5E0',
+    'target-arrow-shape': 'none',
+    'width': 1.5,
+    'opacity': 0.5,
+  }},
+  { selector: 'edge.dimmed',      style: { 'opacity': 0.06 }},
+  { selector: 'edge.highlighted', style: { 'width': 4, 'opacity': 1 }},
 ];
 
 // ── View management ───────────────────────────────────────────────────────────
@@ -485,289 +479,308 @@ function switchView(view) {
 function renderView() {
   closeNodeDetail();
   closeEdgeDetail();
+  hideTooltip();
 
-  let nodes, edges;
-
-  if (currentView === 'contradictions') {
-    const connectedIds = new Set(allEdges.flatMap(e => [String(e.source), String(e.target)]));
-    nodes = allNodes.filter(n => connectedIds.has(String(n.id)));
-    edges = allEdges;
+  if (currentView === 'all') {
+    renderAllDecisions();
   } else {
-    nodes = allNodes;
-    edges = allEdges;
-  }
-
-  // For contradictions view, compute preset positions first so buildCy can inject section labels
-  let contraLayout = null;
-  if (currentView === 'contradictions') {
-    const { positions, sectionLabels } = computeContradictionPositions(nodes, edges);
-    contraLayout = { positions, sectionLabels };
-  }
-
-  const layout = getLayout(currentView, nodes, contraLayout);
-  buildCy(nodes, edges, layout, contraLayout);
-  updateStats(nodes.length, edges.length);
-
-  // Sprint header
-  document.getElementById('sprint-header').style.display = 'none';
-  if (currentView === 'sprints' && cy) {
-    cy.ready(() => buildSprintHeader(nodes));
+    renderContradictions();
   }
 }
 
-function getLayout(view, nodes, contraLayout) {
-  if (view === 'contradictions') {
-    return {
-      name: 'preset',
-      positions: n => {
-        const p = contraLayout && contraLayout.positions[n.id()];
-        return p || { x: 0, y: 0 };
-      },
+// ── All Decisions view (Dagre + compound swim-lanes) ──────────────────────────
+function renderAllDecisions() {
+  if (!allNodes.length) { showEmpty(); return; }
+
+  // Build edge-count map for node sizing
+  const edgeCountMap = {};
+  allEdges.forEach(e => {
+    const s = String(e.source), t = String(e.target);
+    edgeCountMap[s] = (edgeCountMap[s] || 0) + 1;
+    edgeCountMap[t] = (edgeCountMap[t] || 0) + 1;
+  });
+
+  // Determine which categories have nodes
+  const usedCats = new Set();
+  allNodes.forEach(n => {
+    const nid = String(n.uuid || n.id);
+    const label = n.title || n.label || '';
+    const catId = classifyDecision(label, n.type, n.rationale || n.description || '');
+    usedCats.add(catId);
+  });
+
+  // Compound parent elements
+  const compoundEls = CATEGORIES
+    .filter(c => usedCats.has(c.id))
+    .map(c => ({ data: { id: c.id, label: c.label } }));
+
+  // Decision node elements
+  const nodeEls = allNodes.map(n => {
+    const nid     = String(n.uuid || n.id);
+    const label   = n.title || n.label || '';
+    const type    = normalizeType(n.type || 'technical');
+    const status  = (n.superseded_by || n.superseded) ? 'superseded' : 'active';
+    const rawConf = parseFloat(n.confidence || 0.80);
+    const conf    = rawConf > 1 ? rawConf / 100 : rawConf;
+    const ec      = edgeCountMap[nid] || 0;
+    const size    = 40 + ec * 4;
+    const nodeW   = Math.max(120, size);
+    const nodeH   = Math.max(40, Math.round(size * 0.55));
+    const catId   = classifyDecision(label, n.type, n.rationale || n.description || '');
+
+    return { data: {
+      id:          nid,
+      label:       truncate(label, 60),
+      parent:      catId,
+      type,
+      status,
+      confidence:  conf,
+      fullLabel:   label,
+      rationale:   n.rationale || n.description || '',
+      source:      n.source_type || 'manual',
+      sourcePr:    n.source_pr   || null,
+      date:        n.date        || '',
+      superseded:  status === 'superseded',
+      supersededBy: n.superseded_by  || '',
+      supersededAt: n.superseded_at  || '',
+      nodeW, nodeH,
+      size,
+    }};
+  });
+
+  const edgeEls = buildEdgeEls(allNodes, allEdges);
+
+  buildCy(
+    [...compoundEls, ...nodeEls],
+    edgeEls,
+    {
+      name: 'dagre',
+      rankDir: 'LR',
+      nodeSep: 60,
+      rankSep: 120,
+      padding: 40,
       animate: false,
-      padding: 60,
-    };
-  }
-  if (view === 'sprints') {
-    return {
-      name: 'preset',
-      positions: computeSprintPositions(nodes),
-      animate: false,
-      padding: 50,
-    };
-  }
-  // 'all' — dagre LR: left-to-right flow (Sprint 1 left → Sprint 20 right)
-  return {
-    name: 'dagre',
-    rankDir: 'LR',
-    nodeSep: 40,
-    rankSep: 80,
-    animate: false,
-    padding: 40,
-    fit: true,
-  };
+    }
+  );
+  updateStats(allNodes.length, allEdges.length, 'All Decisions — swim-lane view');
 }
 
-// ── Build Cytoscape ───────────────────────────────────────────────────────────
-function buildCy(nodes, edges, layout, contraLayout) {
-  if (!nodes.length) {
+// ── Contradictions view (Concentric, filtered) ────────────────────────────────
+function renderContradictions() {
+  // Find all nodes involved in contradicts edges
+  const contradictEdges = allEdges.filter(e => normalizeEdgeType(e.type) === 'contradicts');
+
+  if (!contradictEdges.length) {
+    buildCy([], [], { name: 'preset' });
     document.getElementById('cy').innerHTML =
-      '<div class="empty-graph"><div class="empty-graph-icon">⬡</div>' +
-      '<div class="empty-graph-title">No decisions yet</div>' +
-      '<div class="empty-graph-desc">Run <code>smm add-decision</code> to get started</div></div>';
+      '<div class="empty-graph"><div class="empty-graph-icon">✓</div>' +
+      '<div class="empty-graph-title">No contradictions</div>' +
+      '<div class="empty-graph-desc">All decisions are consistent</div></div>';
+    document.getElementById('graph-stats').textContent = '0 contradictions';
     return;
   }
 
-  const isContraView = currentView === 'contradictions';
+  const directIds = new Set(contradictEdges.flatMap(e => [String(e.source), String(e.target)]));
 
-  const cyNodes = nodes.map(n => {
-    const isSuperseded = n.superseded || false;
-    const nodeType = isSuperseded ? 'superseded' : normalizeType(n.type || 'technical');
-    const rawConf = parseFloat(n.confidence || 0.80);
-    const conf = rawConf > 1 ? rawConf / 100 : rawConf;
-
-    // Shape / dimensions vary by view
-    let w, h, shape, textMaxW, fontSize;
-    if (isContraView) {
-      w = 200; h = 60; shape = 'round-rectangle'; textMaxW = '186px'; fontSize = '10px';
-    } else if (currentView === 'all') {
-      const s = Math.round(14 + conf * 12);
-      w = s; h = s; shape = 'ellipse'; textMaxW = '110px'; fontSize = '9px';
-    } else {
-      // sprints
-      const s = Math.round(28 + conf * 30);
-      w = s; h = s; shape = 'ellipse'; textMaxW = '110px'; fontSize = '9px';
-    }
-
-    const labelLen = isContraView ? 46 : (currentView === 'all' ? 22 : 32);
-    const label = truncate(n.label || '(untitled)', labelLen);
-
-    return {
-      data: {
-        id:           String(n.id),
-        label,
-        fullLabel:    n.label || '',
-        type:         nodeType,
-        confidence:   conf,
-        source:       n.source_type || 'manual',
-        sourcePr:     n.source_pr   || null,
-        date:         n.date        || '',
-        rationale:    n.rationale   || '',
-        overrides:    n.overrides   || null,
-        superseded:   isSuperseded,
-        supersededBy: n.superseded_by  || '',
-        supersededAt: n.superseded_at  || '',
-        w, h, shape, textMaxW, fontSize,
-        size: w,  // keep for backward compat
-        color: TYPE_COLORS[nodeType] || '#9CA3AF',
-      }
-    };
+  // Add immediate neighbors via any edge
+  const visibleIds = new Set(directIds);
+  allEdges.forEach(e => {
+    if (directIds.has(String(e.source))) visibleIds.add(String(e.target));
+    if (directIds.has(String(e.target))) visibleIds.add(String(e.source));
   });
 
-  // Inject section label ghost nodes for contradiction view
-  if (isContraView && contraLayout && contraLayout.sectionLabels) {
-    contraLayout.sectionLabels.forEach(lbl => {
-      cyNodes.push({
-        data: {
-          id: lbl.id,
-          label: lbl.label,
-          w: 320, h: 28, shape: 'rectangle',
-          textMaxW: '310px', fontSize: '10px',
-          color: 'transparent', type: '',
-          fullLabel: '', rationale: '', confidence: 0,
-        },
-        classes: 'section-label',
-        position: { x: lbl.x, y: lbl.y },
-        locked: true,
-        grabbable: false,
-        selectable: false,
-      });
-    });
-  }
+  const filteredNodes = allNodes.filter(n => visibleIds.has(String(n.uuid || n.id)));
+  const filteredEdges = allEdges.filter(e =>
+    visibleIds.has(String(e.source)) && visibleIds.has(String(e.target))
+  );
 
-  // Add sprint ghost nodes for sprint timeline view
-  if (currentView === 'sprints') {
-    const EPOCH = Date.UTC(2025, 8, 1);
-    const SPRINT_DAYS = 2.8;
-    const SPRINT_W = 170;
-    const NODE_H = 46;
-    const sprintNums = new Set();
-    nodes.forEach(n => {
-      if (n.date) {
-        const d = new Date(n.date + 'T00:00:00Z');
-        const dayOffset = (d.getTime() - EPOCH) / 86400000;
-        const sprint = Math.max(1, Math.min(20, Math.floor(dayOffset / SPRINT_DAYS) + 1));
-        sprintNums.add(sprint);
-      }
-    });
-    sprintNums.forEach(s => {
-      cyNodes.push({
-        data: { id: 'sprint-lbl-' + s, label: 'Sprint ' + s, type: '', size: 50,
-                w: 50, h: 50, shape: 'rectangle', textMaxW: '60px', fontSize: '9px',
-                color: '#f0f0ee' },
-        classes: 'sprint-label',
-        position: { x: (s - 1) * SPRINT_W + 56, y: -30 },
-        locked: true,
-        grabbable: false,
-        selectable: false,
-      });
-    });
-  }
+  const edgeCountMap = {};
+  filteredEdges.forEach(e => {
+    const s = String(e.source), t = String(e.target);
+    edgeCountMap[s] = (edgeCountMap[s] || 0) + 1;
+    edgeCountMap[t] = (edgeCountMap[t] || 0) + 1;
+  });
 
-  const cyEdges = edges
-    .filter(e => nodes.some(n => String(n.id) === String(e.source)) &&
-                 nodes.some(n => String(n.id) === String(e.target)))
+  const nodeEls = filteredNodes.map(n => {
+    const nid     = String(n.uuid || n.id);
+    const label   = n.title || n.label || '';
+    const type    = normalizeType(n.type || 'technical');
+    const status  = (n.superseded_by || n.superseded) ? 'superseded' : 'active';
+    const rawConf = parseFloat(n.confidence || 0.80);
+    const conf    = rawConf > 1 ? rawConf / 100 : rawConf;
+    const ec      = edgeCountMap[nid] || 0;
+    const size    = 40 + ec * 4;
+    const nodeW   = Math.max(120, size);
+    const nodeH   = Math.max(40, Math.round(size * 0.55));
+
+    return { data: {
+      id:          nid,
+      label:       truncate(label, 60),
+      type,
+      status,
+      confidence:  conf,
+      fullLabel:   label,
+      rationale:   n.rationale || n.description || '',
+      source:      n.source_type || 'manual',
+      sourcePr:    n.source_pr   || null,
+      date:        n.date        || '',
+      superseded:  status === 'superseded',
+      supersededBy: n.superseded_by  || '',
+      supersededAt: n.superseded_at  || '',
+      nodeW, nodeH,
+      size,
+    }};
+  });
+
+  const edgeEls = buildEdgeEls(filteredNodes, filteredEdges);
+
+  buildCy(
+    nodeEls,
+    edgeEls,
+    {
+      name: 'concentric',
+      concentric: node => node.degree(),
+      levelWidth: () => 2,
+      minNodeSpacing: 30,
+      padding: 60,
+      animate: false,
+    }
+  );
+  updateStats(filteredNodes.length, filteredEdges.length, `Contradictions — ${contradictEdges.length} conflict${contradictEdges.length !== 1 ? 's' : ''}`);
+}
+
+// ── Edge element builder ──────────────────────────────────────────────────────
+function buildEdgeEls(nodes, edges) {
+  const nodeIds = new Set(nodes.map(n => String(n.uuid || n.id)));
+  return edges
+    .filter(e => nodeIds.has(String(e.source)) && nodeIds.has(String(e.target)))
     .map((e, i) => ({
       data: {
         id:          'e' + i,
         source:      String(e.source),
         target:      String(e.target),
-        type:        e.type   || 'related',
+        type:        normalizeEdgeType(e.type),
         explanation: e.explanation || e.label || '',
       }
     }));
+}
 
+// ── Build Cytoscape ───────────────────────────────────────────────────────────
+function buildCy(nodeEls, edgeEls, layout) {
   if (cy) { cy.destroy(); cy = null; }
 
   cy = cytoscape({
     container: document.getElementById('cy'),
-    elements:  { nodes: cyNodes, edges: cyEdges },
+    elements:  { nodes: nodeEls, edges: edgeEls },
     style:     CY_STYLES,
     layout,
-    userZoomingEnabled:   true,
-    userPanningEnabled:   true,
-    boxSelectionEnabled:  false,
-    minZoom: 0.05,
+    userZoomingEnabled:  true,
+    userPanningEnabled:  true,
+    boxSelectionEnabled: false,
+    minZoom: 0.04,
     maxZoom: 4,
   });
 
+  // Click node → detail panel
   cy.on('tap', 'node', e => {
-    if (e.target.hasClass('sprint-label') || e.target.hasClass('section-label')) return;
-    showNodeDetail(e.target.data());
-    highlightNeighbourhood(e.target);
+    const n = e.target;
+    if (n.isParent()) return;
+    showNodeDetail(n.data());
   });
+
+  // Double-click → zoom to node (500ms)
+  cy.on('dbltap', 'node', e => {
+    const n = e.target;
+    if (n.isParent()) return;
+    cy.animate({ fit: { eles: n, padding: 80 }, duration: 500 });
+  });
+
+  // Click edge → edge detail
   cy.on('tap', 'edge', e => {
     showEdgeDetail(e.target.data());
   });
+
+  // Click canvas → reset
   cy.on('tap', e => {
     if (e.target === cy) {
       closeNodeDetail();
       closeEdgeDetail();
-      cy.nodes().removeClass('dimmed');
+      cy.elements().removeClass('dimmed');
       cy.edges().removeClass('dimmed');
     }
   });
+
+  // Hover → neighborhood highlight (15% fade) + tooltip
   cy.on('mouseover', 'node', e => {
     const n = e.target;
-    if (n.hasClass('sprint-label') || n.hasClass('section-label')) return;
+    if (n.isParent()) return;
     n.addClass('hovered');
-    const d = n.data();
-    const tip = document.getElementById('node-tooltip');
-    if (!tip) return;
-    const rp = n.renderedPosition();
-    const cRect = document.getElementById('cy').getBoundingClientRect();
-    tip.innerHTML = '<strong>' + escHtml(d.fullLabel || d.label) + '</strong>'
-      + (d.rationale ? '<span>' + escHtml(d.rationale.slice(0, 180)) + (d.rationale.length > 180 ? '…' : '') + '</span>' : '');
-    const tipX = cRect.left + rp.x + 16;
-    const tipY = cRect.top  + rp.y - 8;
-    // Clamp to viewport
-    tip.style.display = 'block';
-    const tw = tip.offsetWidth;
-    const vpW = window.innerWidth;
-    tip.style.left = Math.min(tipX, vpW - tw - 12) + 'px';
-    tip.style.top  = tipY + 'px';
+    cy.elements().not(n.closedNeighborhood()).addClass('dimmed');
+    showTooltipForNode(n, e.originalEvent);
   });
+
   cy.on('mouseout', 'node', e => {
+    if (e.target.isParent()) return;
     e.target.removeClass('hovered');
-    const tip = document.getElementById('node-tooltip');
-    if (tip) tip.style.display = 'none';
+    cy.elements().removeClass('dimmed');
+    hideTooltip();
   });
 }
 
-// ── Sprint layout helper ──────────────────────────────────────────────────────
-function computeSprintPositions(nodes) {
-  const EPOCH = Date.UTC(2025, 8, 1); // Sep 1 2025
-  const SPRINT_DAYS = 2.8;
-  const SPRINT_W = 170;
-  const NODE_H = 46;
-  const COLS = 2;
-  const counters = {};
-  const positions = {};
+// ── Tooltip ───────────────────────────────────────────────────────────────────
+function showTooltipForNode(node, evt) {
+  const d = node.data();
+  const badge = TYPE_BADGE[d.type] || { bg: '#9CA3AF', label: d.type || 'technical' };
+  const confPct = Math.round((parseFloat(d.confidence || 0)) * 100);
+  const rationale = (d.rationale || '').slice(0, 150);
 
-  nodes.forEach(n => {
-    let sprint = 1;
-    if (n.date) {
-      const d = new Date(n.date + 'T00:00:00Z');
-      const dayOffset = (d.getTime() - EPOCH) / 86400000;
-      sprint = Math.max(1, Math.min(20, Math.floor(dayOffset / SPRINT_DAYS) + 1));
-    }
-    const idx = counters[sprint] || 0;
-    counters[sprint] = idx + 1;
-    const col = idx % COLS;
-    const row = Math.floor(idx / COLS);
-    positions[String(n.id)] = {
-      x: (sprint - 1) * SPRINT_W + col * 76 + 20,
-      y: row * NODE_H + 30,
-    };
-  });
-  return positions;
+  const tip = document.getElementById('node-tooltip');
+  tip.innerHTML =
+    '<strong>' + escHtml(d.fullLabel || d.label) + '</strong>' +
+    '<div class="tt-meta">' +
+      '<span class="tt-badge" style="background:' + badge.bg + '">' + escHtml(badge.label) + '</span>' +
+      '<span class="tt-conf">' + confPct + '% confidence</span>' +
+    '</div>' +
+    (rationale
+      ? '<div class="tt-rationale">' + escHtml(rationale) + (d.rationale && d.rationale.length > 150 ? '…' : '') + '</div>'
+      : '');
+
+  tip.style.display = 'block';
+  positionTooltip(tip, evt);
 }
 
-function buildSprintHeader(nodes) {
-  if (!cy) return;
-  // not needed — sprint labels are cytoscape nodes
+function positionTooltip(tip, evt) {
+  if (!evt) return;
+  const vpW = window.innerWidth;
+  const vpH = window.innerHeight;
+  let x = evt.clientX + 16;
+  let y = evt.clientY - 8;
+  tip.style.left = '-9999px';
+  tip.style.top  = '-9999px';
+  tip.style.display = 'block';
+  const tw = tip.offsetWidth;
+  const th = tip.offsetHeight;
+  if (x + tw + 12 > vpW) x = evt.clientX - tw - 16;
+  if (y + th + 12 > vpH) y = vpH - th - 12;
+  tip.style.left = Math.max(8, x) + 'px';
+  tip.style.top  = Math.max(8, y) + 'px';
 }
 
-// ── Neighbourhood highlight ───────────────────────────────────────────────────
-function highlightNeighbourhood(node) {
-  if (!cy) return;
-  cy.nodes().removeClass('dimmed');
-  cy.edges().removeClass('dimmed');
-  const hood = node.closedNeighborhood();
-  cy.nodes().not(hood).addClass('dimmed');
-  cy.edges().not(hood).addClass('dimmed');
+function hideTooltip() {
+  const tip = document.getElementById('node-tooltip');
+  if (tip) tip.style.display = 'none';
 }
 
-// ── Node detail ───────────────────────────────────────────────────────────────
+// ── Neighbourhood highlight (manual via button) ───────────────────────────────
+function highlightConnected() {
+  if (!selectedNodeData || !cy) return;
+  const node = cy.nodes(`[id="${selectedNodeData.id}"]`);
+  if (!node.length) return;
+  cy.elements().removeClass('dimmed');
+  cy.elements().not(node.closedNeighborhood()).addClass('dimmed');
+}
+
+// ── Node detail panel ─────────────────────────────────────────────────────────
 function showNodeDetail(d) {
   if (!d) return;
   selectedNodeData = d;
@@ -809,29 +822,24 @@ function closeNodeDetail() {
   if (cy) cy.nodes().unselect();
 }
 
-// ── Edge detail ───────────────────────────────────────────────────────────────
+// ── Edge detail panel ─────────────────────────────────────────────────────────
 function showEdgeDetail(d) {
   const isContradict = d.type === 'contradicts';
   const isSupersedes = d.type === 'supersedes';
   const titleEl = document.getElementById('ed-title');
   titleEl.textContent = isContradict ? '⚡ Contradiction' : isSupersedes ? '→ Supersedes' : '↔ Relates to';
   titleEl.style.color = isContradict ? 'var(--red)' : isSupersedes ? 'var(--accent)' : 'var(--text-mid)';
+  document.getElementById('ed-type').textContent = (d.type || 'relates').replace(/_/g, ' ');
 
-  document.getElementById('ed-type').textContent = (d.type || 'related').replace(/_/g, ' ');
-
-  const srcNode = allNodes.find(n => String(n.id) === String(d.source));
-  const tgtNode = allNodes.find(n => String(n.id) === String(d.target));
-  const srcTitle = srcNode ? truncate(srcNode.label || '', 50) : d.source;
-  const tgtTitle = tgtNode ? truncate(tgtNode.label || '', 50) : d.target;
+  const srcNode = allNodes.find(n => String(n.uuid || n.id) === String(d.source));
+  const tgtNode = allNodes.find(n => String(n.uuid || n.id) === String(d.target));
+  const srcTitle = srcNode ? truncate(srcNode.title || srcNode.label || '', 50) : d.source;
+  const tgtTitle = tgtNode ? truncate(tgtNode.title || tgtNode.label || '', 50) : d.target;
 
   let explanation = d.explanation || '';
-  if (!explanation && isContradict) {
-    explanation = `"${srcTitle}" contradicts "${tgtTitle}"`;
-  } else if (!explanation && isSupersedes) {
-    explanation = `"${srcTitle}" supersedes "${tgtTitle}"`;
-  }
+  if (!explanation && isContradict) explanation = `"${srcTitle}" contradicts "${tgtTitle}"`;
+  else if (!explanation && isSupersedes) explanation = `"${srcTitle}" supersedes "${tgtTitle}"`;
   document.getElementById('ed-explanation').textContent = explanation.slice(0, 400) || '—';
-
   document.getElementById('edge-detail').classList.add('visible');
 }
 
@@ -840,24 +848,30 @@ function closeEdgeDetail() {
 }
 
 // ── Stats bar ─────────────────────────────────────────────────────────────────
-function updateStats(nodeCount, edgeCount) {
-  const label = {
-    contradictions: 'Contradiction focus',
-    all:            'All decisions',
-    sprints:        'Sprint timeline',
-  }[currentView] || '';
+function updateStats(nodeCount, edgeCount, label) {
   document.getElementById('graph-stats').textContent =
-    `${nodeCount} node${nodeCount !== 1 ? 's' : ''} · ${edgeCount} edge${edgeCount !== 1 ? 's' : ''}  ·  ${label}`;
+    `${nodeCount} node${nodeCount !== 1 ? 's' : ''} · ${edgeCount} edge${edgeCount !== 1 ? 's' : ''}  ·  ${label || ''}`;
+}
+
+function showEmpty() {
+  document.getElementById('cy').innerHTML =
+    '<div class="empty-graph"><div class="empty-graph-icon">⬡</div>' +
+    '<div class="empty-graph-title">No decisions yet</div>' +
+    '<div class="empty-graph-desc">Run <code>smm add-decision</code> to get started</div></div>';
+  document.getElementById('graph-stats').textContent = '0 nodes';
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
 function runQuery(q) {
-  if (!cy || !q) {
-    if (cy) { cy.nodes().style('opacity', 1); cy.edges().style('opacity', 0.6); }
+  if (!cy) return;
+  if (!q) {
+    cy.nodes().style('opacity', '');
+    cy.edges().style('opacity', '');
     return;
   }
   const ql = q.toLowerCase();
   cy.nodes().forEach(node => {
+    if (node.isParent()) return;
     const d = node.data();
     const match = (d.fullLabel || d.label || '').toLowerCase().includes(ql) ||
                   (d.rationale || '').toLowerCase().includes(ql) ||
@@ -867,11 +881,12 @@ function runQuery(q) {
   cy.edges().style('opacity', 0.12);
 
   const first = allNodes.find(n =>
-    (n.label || '').toLowerCase().includes(ql) ||
+    (n.title || n.label || '').toLowerCase().includes(ql) ||
     (n.rationale || '').toLowerCase().includes(ql)
   );
   if (first) {
-    const cyNode = cy.nodes(`[id="${String(first.id)}"]`);
+    const nid = String(first.uuid || first.id);
+    const cyNode = cy.nodes(`[id="${nid}"]`);
     if (cyNode.length) {
       cy.animate({ fit: { eles: cyNode, padding: 80 }, duration: 350 });
       showNodeDetail(cyNode.data());
@@ -901,18 +916,13 @@ function exportNodeMd() {
   a.click(); URL.revokeObjectURL(a.href);
 }
 
-function highlightConnected() {
-  if (!selectedNodeData || !cy) return;
-  const node = cy.nodes(`[id="${selectedNodeData.id}"]`);
-  if (node.length) highlightNeighbourhood(node);
-}
-
 // ── Zoom ──────────────────────────────────────────────────────────────────────
 function zoomIn()    { if (cy) cy.zoom({ level: cy.zoom() * 1.3, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } }); }
 function zoomOut()   { if (cy) cy.zoom({ level: cy.zoom() * 0.77, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } }); }
-function resetZoom() { if (cy) cy.fit(cy.nodes().not('.sprint-label, .section-label'), 40); }
+function resetZoom() { if (cy) cy.fit(undefined, 40); }
 
-window.addEventListener('resize', () => { if (cy) cy.fit(cy.nodes().not('.sprint-label, .section-label'), 40); });
+window.addEventListener('resize', () => { if (cy) cy.fit(undefined, 40); });
+
 document.addEventListener('keydown', e => {
   if ((e.key === 'f' || e.key === 'F') && document.activeElement.tagName !== 'INPUT') {
     const el = document.getElementById('cy');
@@ -920,9 +930,22 @@ document.addEventListener('keydown', e => {
   }
   if (e.key === 'Escape' && document.activeElement.tagName !== 'INPUT') {
     closeNodeDetail(); closeEdgeDetail();
-    if (cy) { cy.nodes().removeClass('dimmed'); cy.edges().removeClass('dimmed'); }
+    if (cy) { cy.elements().removeClass('dimmed'); }
   }
 });
+
+// ── Collapsible legend ────────────────────────────────────────────────────────
+(function() {
+  const toggle = document.getElementById('legend-toggle');
+  const body   = document.getElementById('legend-body');
+  const arrow  = document.getElementById('legend-arrow');
+  if (!toggle) return;
+  toggle.addEventListener('click', () => {
+    const open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : 'block';
+    arrow.textContent  = open ? '▶' : '▼';
+  });
+})();
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 async function loadGraph() {
@@ -938,11 +961,7 @@ async function loadGraph() {
     allEdges   = data.edges || [];
 
     if (!allNodes.length && !allEdges.length) {
-      document.getElementById('cy').innerHTML =
-        '<div class="empty-graph"><div class="empty-graph-icon">⬡</div>' +
-        '<div class="empty-graph-title">Graph is empty</div>' +
-        '<div class="empty-graph-desc">No decisions found in this project</div></div>';
-      document.getElementById('graph-stats').textContent = '0 nodes';
+      showEmpty();
       return;
     }
     renderView();

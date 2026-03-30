@@ -78,10 +78,32 @@
   .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--text); color: white; padding: 10px 18px; border-radius: 8px; font-size: 12px; opacity: 0; transition: all 0.3s; z-index: 1000; pointer-events: none; }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: var(--border-dark); border-radius: 10px; }
+  .rm-option { display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:7px;cursor:pointer;margin-bottom:8px;transition:background .1s,border-color .1s; }
+  .rm-option.rm-selected { border-color: var(--accent); background: var(--accent-light); }
 </style>
 </head>
 <body>
 <div class="toast" id="toast"></div>
+
+<div id="resolve-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.35);z-index:200;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px;max-width:520px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.12)">
+    <div style="font-family:var(--serif);font-size:15px;font-weight:600;margin-bottom:4px">Resolve Contradiction</div>
+    <div id="rm-title" style="font-size:12px;color:var(--text-muted);margin-bottom:16px"></div>
+    <div style="font-size:12px;font-weight:600;color:var(--text-mid);margin-bottom:8px;text-transform:uppercase;letter-spacing:.8px">Which decision wins?</div>
+    <div id="rm-label-a" class="rm-option" data-side="a">
+      <div><div id="rm-title-a" style="font-size:12px;font-weight:600;color:var(--text)"></div><div id="rm-rat-a" style="font-size:11px;color:var(--text-muted);margin-top:2px"></div></div>
+    </div>
+    <div id="rm-label-b" class="rm-option" style="margin-bottom:16px" data-side="b">
+      <div><div id="rm-title-b" style="font-size:12px;font-weight:600;color:var(--text)"></div><div id="rm-rat-b" style="font-size:11px;color:var(--text-muted);margin-top:2px"></div></div>
+    </div>
+    <div style="font-size:12px;font-weight:600;color:var(--text-mid);margin-bottom:6px">Note (optional)</div>
+    <textarea id="rm-note" rows="2" style="width:100%;font-family:var(--sans);font-size:12px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;resize:vertical;margin-bottom:16px;background:var(--surface-2);color:var(--text)" placeholder="Why is this the right call?"></textarea>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn btn-ghost" onclick="closeResolveModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitResolve()">Resolve</button>
+    </div>
+  </div>
+</div>
 
 <aside class="sidebar">
   <div class="logo" style="padding:16px 14px 12px;border-bottom:1px solid var(--border)">
@@ -150,6 +172,8 @@
 <script>
 let allContradictions = [];
 
+window.resolveModalState = { contradictionId: null, contradictionIndex: null, optionAId: null, optionBId: null, selectedSide: null };
+
 function showToast(msg) {
   const t = document.getElementById('toast'); t.textContent = msg;
   t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2800);
@@ -184,7 +208,7 @@ function renderContradictions() {
     const isResolved = c.resolved;
     const action = isResolved
       ? `<span class="con-resolved-tag">✓ Resolved</span>`
-      : `<button class="con-action" onclick="resolveContradiction('${c.id || i}', ${i})">Resolve</button>`;
+      : `<button class="con-action" onclick="resolveContradiction('${c.id || i}', ${i});event.stopPropagation()">Resolve</button>`;
     return `<div class="contradiction-row${isResolved ? ' resolved' : ''}">
       <div class="con-icon">${isResolved ? '✓' : '⚠'}</div>
       <div class="con-text">
@@ -197,19 +221,51 @@ function renderContradictions() {
   }).join('');
 }
 
-async function resolveContradiction(id, idx) {
-  const resolution = prompt('Describe the resolution:');
-  if (!resolution) return;
+function resolveContradiction(id, idx) {
+  const c = allContradictions[idx];
+  window.resolveModalState = { contradictionId: id, contradictionIndex: idx, optionAId: c.decision_a_id || '', optionBId: c.decision_b_id || '', selectedSide: null };
+  document.getElementById('rm-title').textContent = (c.decision_a || '') + ' ↔ ' + (c.decision_b || '');
+  document.getElementById('rm-title-a').textContent = c.decision_a || '';
+  document.getElementById('rm-rat-a').textContent = c.decision_a_rationale || '';
+  document.getElementById('rm-title-b').textContent = c.decision_b || '';
+  document.getElementById('rm-rat-b').textContent = c.decision_b_rationale || '';
+  document.getElementById('rm-label-a').classList.remove('rm-selected');
+  document.getElementById('rm-label-b').classList.remove('rm-selected');
+  document.getElementById('rm-note').value = '';
+  document.getElementById('resolve-modal').style.display = 'flex';
+}
+window.resolveContradiction = resolveContradiction;
+
+document.addEventListener('click', function(e) {
+  var card = e.target.closest('[data-side]');
+  if (card === null) return;
+  window.resolveModalState.selectedSide = card.getAttribute('data-side');
+  document.querySelectorAll('[data-side]').forEach(function(el) { el.classList.remove('rm-selected'); });
+  card.classList.add('rm-selected');
+});
+
+function closeResolveModal() {
+  document.getElementById('resolve-modal').style.display = 'none';
+  window.resolveModalState = { contradictionId: null, contradictionIndex: null, optionAId: null, optionBId: null, selectedSide: null };
+}
+window.closeResolveModal = closeResolveModal;
+
+async function submitResolve() {
+  const { selectedSide, contradictionId, contradictionIndex, optionAId, optionBId } = window.resolveModalState;
+  if (selectedSide === null) { showToast('Pick a winner first'); return; }
+  const winnerId = selectedSide === 'a' ? optionAId : optionBId;
+  const loserId = selectedSide === 'a' ? optionBId : optionAId;
+  const note = document.getElementById('rm-note').value.trim();
+  closeResolveModal();
   try {
-    const r = await fetch(`/api/contradictions/${encodeURIComponent(id)}/resolve`, {
+    const r = await fetch(`/api/contradictions/${encodeURIComponent(contradictionId)}/resolve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ resolution })
+      body: JSON.stringify({ winner_id: winnerId, loser_id: loserId, note })
     });
     if (r.ok) {
-      allContradictions[idx].resolved = true;
-      allContradictions[idx].resolution = resolution;
-      allContradictions[idx].resolved_at = new Date().toISOString();
+      allContradictions[contradictionIndex].resolved = true;
+      allContradictions[contradictionIndex].resolved_at = new Date().toISOString();
       renderContradictions();
       showToast('Contradiction resolved');
     } else {
@@ -219,6 +275,7 @@ async function resolveContradiction(id, idx) {
     showToast('Error: ' + e.message);
   }
 }
+window.submitResolve = submitResolve;
 
 async function loadContradictions() {
   try {

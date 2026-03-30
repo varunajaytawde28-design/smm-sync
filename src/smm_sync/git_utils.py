@@ -7,9 +7,13 @@ from pathlib import Path
 HOOK_SCRIPT = """\
 #!/bin/sh
 # smm-sync pre-commit hook
-# Recompiles CLAUDE.md/.cursorrules/AGENTS.md from smm.toml on every commit.
+# Runs smm check; only recompiles CLAUDE.md/.cursorrules/AGENTS.md if new decisions found.
 if command -v smm >/dev/null 2>&1; then
-    smm compile --quiet && git add CLAUDE.md .cursorrules AGENTS.md 2>/dev/null || true
+    smm check --quiet 2>/dev/null || true
+    if [ -f .smm/.check_dirty ]; then
+        smm compile --quiet && git add CLAUDE.md .cursorrules AGENTS.md 2>/dev/null || true
+        rm -f .smm/.check_dirty
+    fi
 fi
 """
 

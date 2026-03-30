@@ -1,0 +1,8 @@
+---
+description: Axiom Hub Context-as-a-Service integration
+alwaysApply: true
+---
+
+Before writing any code, call the `get_project_context` MCP tool to load architectural decisions and check for contradictions. Call `add_decision` for any implementation choice where alternatives existed.
+
+See AGENTS.md in the project root for full decision capture rules and examples.

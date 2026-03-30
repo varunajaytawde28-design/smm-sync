@@ -1022,19 +1022,6 @@ class GraphClient:
             f"Alternatives considered: {'; '.join(alternatives) if alternatives else 'none'}"
         )
 
-        # Contradiction check against existing decisions — pure vector similarity,
-        # zero API calls. Runs BEFORE writing so the new episode is not compared
-        # against itself.
-        contradictions = await self.contradiction_check(
-            f"{title}: {content}", project
-        )
-        if contradictions:
-            for c in contradictions:
-                print(f"  \u26a0\ufe0f  Possible contradiction: {c['existing']}", file=sys.stderr)
-            episode_body += "\n\nContradictions detected: " + ", ".join(
-                [c["existing"] for c in contradictions]
-            )
-
         # Ensure Kuzu driver + schema are initialised (no API calls in this path
         # because _NoKeyLLMClient is used when api_key is empty, and we never
         # call add_episode which is the only method that invokes the LLM client).
@@ -1068,103 +1055,6 @@ class GraphClient:
         async with self._write_lock:
             await self._driver.execute_query(cypher)
 
-        # Episodic-level contradiction detection.
-        # Route based on .smm/config.json {"agent": "..."}.
-        # - "claude-code" / "cursor" / "both" → call the user's AI agent CLI
-        # - "skip" (or config absent)          → local embedding heuristic
-        import json as _json
-        smm_dir = self.graph_dir.parent
-        _agent_cfg = "skip"
-        try:
-            _cfg_path = smm_dir / "config.json"
-            # Fix 6: if config.json not found at graph_dir.parent, walk up from cwd
-            if not _cfg_path.exists():
-                try:
-                    from smm_sync.config import get_smm_dir as _get_smm_dir_cfg
-                    _alt = _get_smm_dir_cfg() / "config.json"
-                    if _alt.exists():
-                        _cfg_path = _alt
-                except Exception:
-                    pass
-            if _cfg_path.exists():
-                _agent_cfg = _json.loads(_cfg_path.read_text(encoding="utf-8")).get(
-                    "agent", "skip"
-                )
-        except Exception:
-            pass  # malformed config → fall back to local
-
-        if _agent_cfg == "skip":
-            local_contradictions = await self._detect_local_contradictions(
-                title=title,
-                episode_body=episode_body,
-                episode_uuid=episode_uuid,
-                project=project,
-            )
-        else:
-            local_contradictions = await self._detect_via_agent_cli(
-                title=title,
-                episode_body=episode_body,
-                episode_uuid=episode_uuid,
-                project=project,
-                agent=_agent_cfg,
-            )
-
-        if local_contradictions:
-            # Filter out pairs already actioned in the index so the same
-            # contradiction is never written to contradictions.jsonl twice.
-            try:
-                from smm_sync.contradiction_index import filter_new_contradictions
-                local_contradictions = filter_new_contradictions(
-                    smm_dir,
-                    local_contradictions,
-                    new_title=title,
-                )
-            except Exception:
-                pass  # never block on index read failure
-            contradictions_path = smm_dir / "contradictions.jsonl"
-            # Dedup: skip reversed pairs already in contradictions.jsonl.
-            # Normalized pair key ("A","B") == ("B","A") so "SQLite↔Postgres"
-            # is never written twice even when synced in opposite order.
-            _seen_pair_keys: set[tuple] = set()
-            try:
-                if contradictions_path.exists():
-                    for _ln in contradictions_path.read_text(encoding="utf-8").splitlines():
-                        _ln = _ln.strip()
-                        if _ln:
-                            try:
-                                _e = _json.loads(_ln)
-                                _da = _e.get("decision_a", "") or ""
-                                _db = _e.get("decision_b", "") or ""
-                                if _da and _db:
-                                    _seen_pair_keys.add(_contradiction_pair_key(_da, _db))
-                            except Exception:
-                                pass
-            except Exception:
-                pass
-            _deduped: list[dict] = []
-            for c in local_contradictions:
-                _pk = _contradiction_pair_key(
-                    c.get("decision_a", ""), c.get("decision_b", "")
-                )
-                if _pk not in _seen_pair_keys:
-                    _deduped.append(c)
-                    _seen_pair_keys.add(_pk)
-            local_contradictions = _deduped
-            for c in local_contradictions:
-                # Fix 5: print clean contradiction warning to stderr before "recorded"
-                _existing = c.get("decision_b", "")
-                _explanation = c.get("explanation", "Conflicting decisions detected")
-                print(
-                    f"\u26a0 Contradiction: conflicts with \"{_existing}\"\n"
-                    f"  Reason: {_explanation}",
-                    file=sys.stderr,
-                )
-                try:
-                    from smm_sync.jsonl_writer import append_jsonl_locked
-                    append_jsonl_locked(contradictions_path, c)
-                except Exception:
-                    pass  # never block ingestion on JSONL write failure
-
         # Incrementally build edges for the new node using local embeddings.
         # Zero API calls — embedding-based only. Runs after the node is written
         # so the new node is included in the pairwise similarity scan.
@@ -1184,8 +1074,7 @@ class GraphClient:
         # the +N this week counter have data to display.
         try:
             import json as _json_audit
-            # Fix 2: use agent name from config.json (already resolved above as _agent_cfg)
-            _audit_agent = _agent_cfg if _agent_cfg not in ("skip", None) else "manual"
+            _audit_agent = "manual"
             audit_entry = {
                 "event_type": "decision_added",
                 "timestamp": now.isoformat(),

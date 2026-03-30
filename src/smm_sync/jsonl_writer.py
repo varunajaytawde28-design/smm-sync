@@ -250,7 +250,7 @@ def append_jsonl_locked(path: Path, record: dict, retries: int = 3, retry_delay:
     return False
 
 
-def write_decision(data: dict, project: str = "smm-sync") -> str:
+def write_decision(data: dict, project: str = "smm-sync", smm_dir: "Path | None" = None) -> str:
     """Append one decision line to .smm/decisions.jsonl.
 
     Also appends an audit entry to .smm/compliance_lineage.jsonl
@@ -261,6 +261,9 @@ def write_decision(data: dict, project: str = "smm-sync") -> str:
               Optional: confidence, alternatives, constraints, project,
               source, made_by.
         project: Default project name used when data["project"] is absent.
+        smm_dir: Explicit path to the .smm/ directory. When provided, skips
+                 the CWD walk — required when called from the MCP server
+                 whose CWD is not the project root.
 
     Returns:
         UUID string of the written decision.
@@ -282,8 +285,9 @@ def write_decision(data: dict, project: str = "smm-sync") -> str:
         (data.get("type") or data.get("decision_type") or "technical").strip()
     )
 
-    # Locate .smm/
-    smm_dir = _find_smm_dir()
+    # Locate .smm/ — use caller-supplied path first, then walk up from CWD.
+    if smm_dir is None:
+        smm_dir = _find_smm_dir()
     if smm_dir is None:
         try:
             from smm_sync.config import get_smm_dir
@@ -309,6 +313,9 @@ def write_decision(data: dict, project: str = "smm-sync") -> str:
         "source": data.get("source") or "manual",
         "made_by": data.get("made_by") or "lore-hook",
     }
+    _session_id = (data.get("session_id") or "").strip()
+    if _session_id:
+        record["session_id"] = _session_id
     # Normalize and attach context (EU AI Act Art 12 reference source)
     _raw_ctx = data.get("context")
     if isinstance(_raw_ctx, str) and _raw_ctx:
@@ -334,6 +341,8 @@ def write_decision(data: dict, project: str = "smm-sync") -> str:
             "context_source": record["context"]["source"],
             "context_git_ref": record["context"]["git_ref"],
         }
+        if _session_id:
+            audit["session_id"] = _session_id
         lineage_path = smm_dir / "compliance_lineage.jsonl"
         _write_audit_hashed(lineage_path, audit)
     except Exception:

@@ -289,12 +289,12 @@
       <div id="resolve-ab-mode">
         <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px" id="resolve-contra-title"></div>
         <div class="choice-cards">
-          <div class="choice-card" id="resolve-card-a" onclick="selectBoardChoice('a')">
+          <div class="choice-card" id="resolve-card-a" data-side="a">
             <div class="choice-label">Option A</div>
             <div class="choice-title" id="resolve-a-title"></div>
             <div class="choice-rationale" id="resolve-a-rationale"></div>
           </div>
-          <div class="choice-card" id="resolve-card-b" onclick="selectBoardChoice('b')">
+          <div class="choice-card" id="resolve-card-b" data-side="b">
             <div class="choice-label">Option B</div>
             <div class="choice-title" id="resolve-b-title"></div>
             <div class="choice-rationale" id="resolve-b-rationale"></div>
@@ -356,6 +356,7 @@
 <div class="toast" id="toast"></div>
 
 <script>
+window.resolveModalState = { selectedSide: null };
 let boardItems = [];
 let draggingId = null;
 let pendingResolveId = null;
@@ -431,6 +432,14 @@ function selectBoardChoice(which) {
   if (btn) btn.disabled = false;
 }
 
+document.addEventListener('click', function(e) {
+  var card = e.target.closest('[data-side]');
+  if (card === null) return;
+  var side = card.getAttribute('data-side');
+  window.resolveModalState.selectedSide = side;
+  selectBoardChoice(side);
+});
+
 function switchToCustomMode() {
   document.getElementById('resolve-ab-mode').style.display = 'none';
   document.getElementById('resolve-custom-mode').style.display = 'block';
@@ -456,6 +465,7 @@ async function openResolveModal(itemId) {
   resolveLoserId = null;
   resolveWinnerTitle = null;
   resolveMode = 'custom';
+  window.resolveModalState = { selectedSide: null };
 
   // Reset confirm button to disabled
   const confirmBtn = document.getElementById('resolve-confirm-btn');
@@ -516,6 +526,10 @@ async function openResolveModal(itemId) {
 async function submitResolve() {
   if (resolveMode === 'ab' && pendingContraId) {
     // A/B picker mode: resolve contradiction + mark board item done
+    if (!(window.resolveModalState && window.resolveModalState.selectedSide)) {
+      showToast('✗ Please choose Option A or Option B');
+      return;
+    }
     if (!resolveWinnerId || !resolveLoserId) {
       showToast('✗ Please choose Option A or Option B');
       return;

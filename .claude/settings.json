@@ -1,0 +1,35 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'INPUT=$(cat); if echo \"$INPUT\" | grep -q get_project_context; then exit 0; fi; RESOLVED=$(realpath \"$PWD\"); LOCK=/tmp/smm-session-$(printf \"%s\" \"$RESOLVED\" | shasum | cut -c1-8).lock; FRESH=$(find \"$LOCK\" -mmin -30 2>/dev/null); if [ -z \"$FRESH\" ]; then echo \"\u26a0\ufe0f AXIOM HUB: Call get_project_context first.\" >&2; exit 2; fi'"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'echo \"[Axiom Hub] Did you make an architectural choice? If so, call add_decision before continuing.\" >&2; exit 0'"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'INPUT=$(cat); if echo \"$INPUT\" | grep -q \"git commit\"; then HASH=$(printf \"%s\" \"$PWD\" | shasum | cut -c1-8); rm -f /tmp/smm-session-$HASH.lock /tmp/smm-review-$HASH.lock; echo \"[Axiom Hub] Session complete. Next task will require fresh context load.\" >&2; fi; exit 0'"
+          }
+        ]
+      }
+    ]
+  }
+}
