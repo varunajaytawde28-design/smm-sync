@@ -264,7 +264,7 @@ src/smm_sync/
 ## Contributing
 
 ```bash
-git clone https://github.com/varunajaytawde/smm-sync.git
+git clone https://github.com/varunajaytawde28-design/smm-sync.git
 cd smm-sync
 pip install -e ".[dev]"
 
