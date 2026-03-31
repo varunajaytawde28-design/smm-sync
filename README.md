@@ -73,7 +73,7 @@ Axiom Hub fixes this by giving every AI session a shared memory of what was deci
 
 ```bash
 # Install
-pip install smm-sync
+pip install git+https://github.com/varunajaytawde28-design/smm-sync.git
 
 # Initialize in your project root
 cd your-project
